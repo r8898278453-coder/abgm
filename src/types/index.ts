@@ -216,3 +216,27 @@ export interface TelegramMessage {
     }[];
   };
 }
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  full_name: string;
+  role: 'owner' | 'manager' | 'agency';
+}
+
+export interface CompanyRecord {
+  id: string;
+  user_id?: string;
+  name: string;
+  legal_name?: string;
+  category: string;
+  city: string;
+  phone?: string;
+  website?: string;
+  google_place_id?: string;
+  autopilot_enabled: boolean;
+  score: number;
+  rank_position?: number;
+  created_at?: string;
+}
+

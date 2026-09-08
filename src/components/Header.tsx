@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   ShieldAlert,
   Bot,
@@ -12,8 +12,12 @@ import {
   AlertTriangle,
   Sparkles,
   RotateCcw,
+  LogOut,
+  Plus,
+  ChevronDown,
+  User,
 } from 'lucide-react';
-import { BusinessProfile, UserRole, InterfaceView, ViewMode } from '../types';
+import { BusinessProfile, UserRole, InterfaceView, ViewMode, AuthUser, CompanyRecord } from '../types';
 
 interface HeaderProps {
   business: BusinessProfile;
@@ -27,14 +31,17 @@ interface HeaderProps {
   setIsAutopilotOn: (on: boolean) => void;
   isEmergencyPaused: boolean;
   setIsEmergencyPaused: (paused: boolean) => void;
-  activeLocation?: string;
-  setActiveLocation?: (loc: string) => void;
   growthScore?: number;
-  notificationsCount?: number;
-  onClearNotifications?: () => void;
   onOpenOnboarding?: () => void;
   isLiveMode?: boolean;
   onOpenResetModal?: () => void;
+  // Multi-Company & Auth Props
+  user?: AuthUser | null;
+  companies?: CompanyRecord[];
+  activeCompanyId?: string;
+  onSelectCompany?: (companyId: string) => void;
+  onOpenCreateCompany?: () => void;
+  onLogout?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -49,18 +56,34 @@ export const Header: React.FC<HeaderProps> = ({
   setIsAutopilotOn,
   isEmergencyPaused,
   setIsEmergencyPaused,
-  activeLocation = 'Navi Mumbai (Sector 17 HQ)',
-  setActiveLocation,
   growthScore = 88,
   onOpenOnboarding,
   isLiveMode = false,
   onOpenResetModal,
+  user,
+  companies = [],
+  activeCompanyId,
+  onSelectCompany,
+  onOpenCreateCompany,
+  onLogout,
 }) => {
   const currentView = viewMode || interfaceView || 'web';
   const handleSetView = (v: InterfaceView) => {
     if (setViewMode) setViewMode(v);
     if (setInterfaceView) setInterfaceView(v);
   };
+
+  const activeCompany = companies.find((c) => c.id === activeCompanyId);
+  const displayName = activeCompany ? activeCompany.name : business.name;
+  const displayCategory = activeCompany ? activeCompany.category : business.category;
+  const displayCity = activeCompany ? activeCompany.city : business.city;
+
+  const initials = displayName
+    .split(' ')
+    .slice(0, 2)
+    .map((w) => w[0])
+    .join('')
+    .toUpperCase() || 'AB';
 
   return (
     <header className="sticky top-0 z-40 bg-white/90 backdrop-blur-md border-b border-slate-200 text-slate-900 shadow-xs">
@@ -82,15 +105,15 @@ export const Header: React.FC<HeaderProps> = ({
       )}
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
-        {/* Left: Brand Identity in Bento Style */}
+        {/* Left: Dynamic Company Switcher in Bento Style */}
         <div className="flex items-center gap-3 min-w-0">
-          <div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center text-white font-bold text-lg shadow-xs flex-shrink-0">
-            AS
+          <div className="w-10 h-10 bg-gradient-to-tr from-indigo-700 to-indigo-500 rounded-2xl flex items-center justify-center text-white font-bold text-sm shadow-xs flex-shrink-0">
+            {initials}
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="font-bold text-base tracking-tight truncate text-slate-900">
-                {business.name}
+                {displayName}
               </span>
               <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full text-[10px] font-mono font-bold hidden md:inline-block">
                 bga.aaditechs.in
@@ -99,20 +122,32 @@ export const Header: React.FC<HeaderProps> = ({
                 Score: {growthScore}/100
               </span>
             </div>
+
             <div className="flex items-center gap-2 text-xs text-slate-500">
-              <span className="truncate">{business.category}</span>
+              <span className="truncate max-w-[140px] sm:max-w-none">{displayCategory}</span>
               <span>•</span>
-              <div className="flex items-center gap-1 text-slate-600">
-                <MapPin className="w-3.5 h-3.5 text-indigo-600" />
+              {/* Dynamic Company Switcher Dropdown */}
+              <div className="flex items-center gap-1">
+                <Building2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
                 <select
-                  value={activeLocation}
-                  onChange={(e) => setActiveLocation && setActiveLocation(e.target.value)}
-                  className="bg-slate-100 border border-slate-200 rounded-lg px-2 py-0.5 text-xs text-slate-700 focus:outline-none focus:border-indigo-500 font-medium"
+                  value={activeCompanyId || ''}
+                  onChange={(e) => {
+                    if (e.target.value === '__add_new__') {
+                      if (onOpenCreateCompany) onOpenCreateCompany();
+                    } else if (onSelectCompany) {
+                      onSelectCompany(e.target.value);
+                    }
+                  }}
+                  className="bg-slate-100 border border-slate-300 hover:border-indigo-400 rounded-lg px-2 py-0.5 text-xs text-slate-800 font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
                 >
-                  <option value="Thane West (HQ)">Thane West (HQ)</option>
-                  <option value="Mumbai Fort Studio">Mumbai Fort Studio</option>
-                  <option value="Navi Mumbai Vashi">Navi Mumbai Vashi</option>
-                  <option value="Pune Kothrud Branch">Pune Kothrud Branch</option>
+                  {companies.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      🏢 {c.name} ({c.city})
+                    </option>
+                  ))}
+                  <option value="__add_new__" className="font-bold text-indigo-600 bg-indigo-50">
+                    ➕ Add New Company / Project...
+                  </option>
                 </select>
               </div>
             </div>
@@ -120,7 +155,7 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         {/* Center: Interface Switcher (Bento Capsule) */}
-        <div className="hidden md:flex items-center bg-slate-100 p-1 rounded-2xl border border-slate-200">
+        <div className="hidden lg:flex items-center bg-slate-100 p-1 rounded-2xl border border-slate-200">
           <button
             onClick={() => handleSetView('web')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
@@ -156,26 +191,9 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         </div>
 
-        {/* Right Controls: Role, Autopilot, Emergency Stop in Bento Style */}
+        {/* Right Controls: Autopilot, Emergency Stop, User Session */}
         <div className="flex items-center gap-2 sm:gap-3">
-          {/* Data Environment Reset / Mode Switcher */}
-          {onOpenResetModal && (
-            <button
-              onClick={onOpenResetModal}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition shadow-xs ${
-                isLiveMode
-                  ? 'bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100'
-                  : 'bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100'
-              }`}
-              title="System Reset: Wipe test data to start fresh or reload full blueprint test coverage"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">{isLiveMode ? 'Live Mode' : 'Test Mode'}</span>
-              <span>Reset</span>
-            </button>
-          )}
-
-          {/* 5-Min Setup Wizard (Section 3 & 72) */}
+          {/* Setup Wizard Button */}
           {onOpenOnboarding && (
             <button
               onClick={onOpenOnboarding}
@@ -183,25 +201,9 @@ export const Header: React.FC<HeaderProps> = ({
               title="5-Minute Business Setup & First-Value Audit Wizard"
             >
               <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-              <span>Setup Wizard</span>
+              <span>Audit Wizard</span>
             </button>
           )}
-
-          {/* Role selector */}
-          <div className="hidden lg:flex items-center gap-1.5 bg-slate-100 px-2.5 py-1.5 rounded-xl border border-slate-200 text-xs font-medium text-slate-700">
-            <UserCheck className="w-3.5 h-3.5 text-indigo-600" />
-            <select
-              value={activeRole}
-              onChange={(e) => setActiveRole(e.target.value as UserRole)}
-              className="bg-transparent text-slate-700 focus:outline-none cursor-pointer font-medium"
-            >
-              <option value="owner">Role: Owner</option>
-              <option value="manager">Role: Manager</option>
-              <option value="staff">Role: Staff</option>
-              <option value="agency">Role: Agency</option>
-              <option value="super_admin">Role: Super Admin</option>
-            </select>
-          </div>
 
           {/* Autopilot toggle */}
           <button
@@ -228,11 +230,34 @@ export const Header: React.FC<HeaderProps> = ({
             }`}
           >
             <ShieldAlert className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">{isEmergencyPaused ? 'Resume All' : 'Pause All (Stop)'}</span>
-            <span className="sm:hidden">{isEmergencyPaused ? 'Resume' : 'Stop'}</span>
+            <span className="hidden sm:inline">{isEmergencyPaused ? 'Resume' : 'Pause All'}</span>
           </button>
+
+          {/* Logged-in User Profile & Logout */}
+          {user && (
+            <div className="flex items-center pl-2 border-l border-slate-200 gap-2">
+              <div className="hidden sm:flex flex-col text-right">
+                <span className="text-xs font-bold text-slate-900 leading-tight">
+                  {user.full_name}
+                </span>
+                <span className="text-[10px] text-slate-500 capitalize">
+                  {user.role}
+                </span>
+              </div>
+              {onLogout && (
+                <button
+                  onClick={onLogout}
+                  className="p-1.5 rounded-xl text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition border border-transparent hover:border-rose-200"
+                  title="Sign Out of ABGA"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </header>
   );
 };
+

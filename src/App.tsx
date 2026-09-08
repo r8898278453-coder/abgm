@@ -23,7 +23,20 @@ import { KnowledgeBaseView } from './components/KnowledgeBaseView';
 import { OnboardingModal } from './components/OnboardingModal';
 import { AskAiModal } from './components/AskAiModal';
 import { ResetSystemModal } from './components/ResetSystemModal';
-import { Sparkles } from 'lucide-react';
+import { AuthScreen } from './components/AuthScreen';
+import { CreateCompanyModal } from './components/CreateCompanyModal';
+import { Sparkles, Building2 } from 'lucide-react';
+
+import {
+  getStoredUser,
+  clearStoredSession,
+  fetchUserCompanies,
+  fetchCompanyData,
+  saveCompanyData,
+  getStoredActiveCompanyId,
+  setStoredActiveCompanyId,
+  checkAuthSession,
+} from './services/authService';
 
 import {
   initialBusiness,
@@ -51,9 +64,18 @@ import {
   ContentPost,
   AutonomousAction,
   GrowthScore,
+  AuthUser,
+  CompanyRecord,
 } from './types';
 
 export default function App() {
+  // Authentication & Multi-Company States
+  const [user, setUser] = useState<AuthUser | null>(() => getStoredUser());
+  const [companies, setCompanies] = useState<CompanyRecord[]>([]);
+  const [activeCompanyId, setActiveCompanyId] = useState<string | null>(() => getStoredActiveCompanyId());
+  const [isCreateCompanyOpen, setIsCreateCompanyOpen] = useState<boolean>(false);
+  const [loadingCompanies, setLoadingCompanies] = useState<boolean>(false);
+
   // Global System Controls
   const [activeTab, setActiveTab] = useState<NavigationTab>('dashboard');
   const [userRole, setUserRole] = useState<UserRole>('owner');
@@ -64,26 +86,101 @@ export default function App() {
   const [isOnboardingOpen, setIsOnboardingOpen] = useState<boolean>(false);
   const [isAskAiOpen, setIsAskAiOpen] = useState<boolean>(false);
   const [isResetModalOpen, setIsResetModalOpen] = useState<boolean>(false);
-  const [isLiveMode, setIsLiveMode] = useState<boolean>(() => {
-    try {
-      const saved = localStorage.getItem('localpulse_is_live_mode');
-      return saved ? JSON.parse(saved) : false;
-    } catch {
-      return false;
-    }
-  });
+  const [isLiveMode, setIsLiveMode] = useState<boolean>(true);
 
   // Core Data States
   const [business, setBusiness] = useState<BusinessProfile>(initialBusiness);
-  const [growthScore] = useState<GrowthScore>(initialGrowthScore);
+  const [growthScore, setGrowthScore] = useState<GrowthScore>(initialGrowthScore);
   const [auditItems, setAuditItems] = useState<AuditItem[]>(initialAuditItems);
   const [reviews, setReviews] = useState<ReviewItem[]>(initialReviews);
-  const [keywords] = useState(initialKeywords);
-  const [competitors] = useState(initialCompetitors);
+  const [keywords, setKeywords] = useState(initialKeywords);
+  const [competitors, setCompetitors] = useState(initialCompetitors);
   const [contentPosts, setContentPosts] = useState<ContentPost[]>(initialPosts);
   const [campaigns, setCampaigns] = useState(initialCampaigns);
   const [leads, setLeads] = useState<LeadItem[]>(initialLeads);
   const [actions, setActions] = useState<AutonomousAction[]>(initialAutonomousActions);
+
+  // Verify auth session on mount
+  useEffect(() => {
+    checkAuthSession().then((verifiedUser) => {
+      if (verifiedUser) {
+        setUser(verifiedUser);
+        if (verifiedUser.role) setUserRole(verifiedUser.role);
+      }
+    });
+  }, []);
+
+  // Fetch companies when user is logged in
+  useEffect(() => {
+    if (!user) return;
+    setLoadingCompanies(true);
+    fetchUserCompanies()
+      .then((userCompanies) => {
+        setCompanies(userCompanies);
+        if (userCompanies.length > 0) {
+          const storedId = getStoredActiveCompanyId();
+          const targetCompany = userCompanies.find((c) => c.id === storedId) || userCompanies[0];
+          setActiveCompanyId(targetCompany.id);
+          setStoredActiveCompanyId(targetCompany.id);
+          loadCompanyData(targetCompany);
+        } else {
+          setActiveCompanyId(null);
+        }
+      })
+      .finally(() => setLoadingCompanies(false));
+  }, [user]);
+
+  // Load isolated company data payload
+  const loadCompanyData = async (comp: CompanyRecord) => {
+    setBusiness((prev) => ({
+      ...prev,
+      id: comp.id,
+      name: comp.name,
+      category: comp.category,
+      city: comp.city,
+      phone: comp.phone || prev.phone,
+      website: comp.website || prev.website,
+    }));
+
+    const payload = await fetchCompanyData(comp.id);
+    if (payload) {
+      if (payload.growth_score) setGrowthScore(payload.growth_score);
+      if (payload.audit_items) setAuditItems(payload.audit_items);
+      if (payload.reviews) setReviews(payload.reviews);
+      if (payload.keywords) setKeywords(payload.keywords);
+      if (payload.competitors) setCompetitors(payload.competitors);
+      if (payload.posts) setContentPosts(payload.posts);
+      if (payload.campaigns) setCampaigns(payload.campaigns);
+      if (payload.autonomous_actions) setActions(payload.autonomous_actions);
+    }
+  };
+
+  // Switch company handler
+  const handleSelectCompany = (companyId: string) => {
+    const comp = companies.find((c) => c.id === companyId);
+    if (!comp) return;
+    setActiveCompanyId(companyId);
+    setStoredActiveCompanyId(companyId);
+    loadCompanyData(comp);
+  };
+
+  // New company created handler
+  const handleCompanyCreated = (newComp: CompanyRecord) => {
+    setCompanies((prev) => [...prev, newComp]);
+    setActiveCompanyId(newComp.id);
+    setStoredActiveCompanyId(newComp.id);
+    setIsCreateCompanyOpen(false);
+    loadCompanyData(newComp);
+  };
+
+  // User Logout
+  const handleLogout = () => {
+    clearStoredSession();
+    setUser(null);
+    setCompanies([]);
+    setActiveCompanyId(null);
+  };
+
 
   // Restore saved state from localStorage if available
   useEffect(() => {
@@ -223,6 +320,11 @@ export default function App() {
   // Switch to Telegram view if ViewMode is set to telegram
   const renderedTab = viewMode === 'telegram' ? 'telegram' : activeTab;
 
+  // Render AuthScreen Barrier if not signed in
+  if (!user) {
+    return <AuthScreen onAuthenticated={(u) => setUser(u)} />;
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans selection:bg-indigo-600 selection:text-white">
       {/* Top Header Navigation */}
@@ -241,7 +343,14 @@ export default function App() {
         onOpenOnboarding={() => setIsOnboardingOpen(true)}
         isLiveMode={isLiveMode}
         onOpenResetModal={() => setIsResetModalOpen(true)}
+        user={user}
+        companies={companies}
+        activeCompanyId={activeCompanyId || undefined}
+        onSelectCompany={handleSelectCompany}
+        onOpenCreateCompany={() => setIsCreateCompanyOpen(true)}
+        onLogout={handleLogout}
       />
+
 
       {/* Main View Shell with Bento Spacing */}
       <div className="flex-1 flex max-w-7xl w-full mx-auto px-3 sm:px-6 py-6 gap-6 items-start">
@@ -472,6 +581,21 @@ export default function App() {
         isOpen={isAskAiOpen}
         onClose={() => setIsAskAiOpen(false)}
         business={business}
+      />
+
+      {/* First Company Setup Wizard if zero companies exist */}
+      <CreateCompanyModal
+        isOpen={companies.length === 0 && !loadingCompanies}
+        isFirstCompany={true}
+        onCompanyCreated={handleCompanyCreated}
+      />
+
+      {/* Add New Company Modal triggered from Header dropdown */}
+      <CreateCompanyModal
+        isOpen={isCreateCompanyOpen}
+        isFirstCompany={false}
+        onClose={() => setIsCreateCompanyOpen(false)}
+        onCompanyCreated={handleCompanyCreated}
       />
 
       {/* Complete System Reset & Mode Controller (Section 83) */}

@@ -8,12 +8,43 @@ import {
   createLead,
   updateLeadStatus,
   sendTelegramPushAlert,
+  findUserByEmail,
+  findUserById,
+  createUser,
+  verifyPassword,
+  getUserCompanies,
+  getCompanyById,
+  createCompany,
+  getCompanyDataPayload,
+  saveCompanyDataPayload,
 } from './server/db';
 
 const app = express();
 const PORT = 3000;
 
 app.use(express.json());
+
+// Token helper for session management (Token format: base64(userId:email:timestamp))
+function generateAuthToken(user: { id: string; email: string }): string {
+  const payload = `${user.id}:${user.email}:${Date.now()}`;
+  return Buffer.from(payload).toString('base64');
+}
+
+async function getAuthUserFromRequest(req: express.Request) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return null;
+  }
+  const token = authHeader.split(' ')[1];
+  try {
+    const decoded = Buffer.from(token, 'base64').toString('utf-8');
+    const [userId] = decoded.split(':');
+    if (!userId) return null;
+    return await findUserById(userId);
+  } catch {
+    return null;
+  }
+}
 
 // Initialize Gemini Client safely
 let aiClient: GoogleGenAI | null = null;
@@ -91,6 +122,190 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString(),
   });
 });
+
+// ==================== AUTHENTICATION APIS ==================== //
+
+// Register new user
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { email, password, full_name, role } = req.body;
+    if (!email || !password || !full_name) {
+      res.status(400).json({ success: false, error: 'Email, password, and name are required' });
+      return;
+    }
+
+    const existing = await findUserByEmail(email);
+    if (existing) {
+      res.status(409).json({ success: false, error: 'An account with this email already exists' });
+      return;
+    }
+
+    const user = await createUser({
+      email,
+      password,
+      full_name,
+      role: role || 'owner',
+    });
+
+    const token = generateAuthToken(user);
+    res.status(201).json({
+      success: true,
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        full_name: user.full_name,
+        role: user.role,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// User login
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      res.status(400).json({ success: false, error: 'Email and password are required' });
+      return;
+    }
+
+    const user = await findUserByEmail(email);
+    if (!user) {
+      res.status(401).json({ success: false, error: 'Invalid email or password' });
+      return;
+    }
+
+    const isValid = verifyPassword(password, user.password_hash, user.salt);
+    if (!isValid) {
+      res.status(401).json({ success: false, error: 'Invalid email or password' });
+      return;
+    }
+
+    const token = generateAuthToken(user);
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        full_name: user.full_name,
+        role: user.role,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Current session verification
+app.get('/api/auth/me', async (req, res) => {
+  try {
+    const user = await getAuthUserFromRequest(req);
+    if (!user) {
+      res.status(401).json({ success: false, error: 'Unauthorized or session expired' });
+      return;
+    }
+
+    res.json({
+      success: true,
+      user: {
+        id: user.id,
+        email: user.email,
+        full_name: user.full_name,
+        role: user.role,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// ==================== MULTI-COMPANY APIS ==================== //
+
+// Get all companies for current user
+app.get('/api/companies', async (req, res) => {
+  try {
+    const user = await getAuthUserFromRequest(req);
+    if (!user) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
+
+    const companies = await getUserCompanies(user.id);
+    res.json({ success: true, companies });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Create new company profile
+app.post('/api/companies', async (req, res) => {
+  try {
+    const user = await getAuthUserFromRequest(req);
+    if (!user) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
+
+    const { name, legal_name, category, city, phone, website, google_place_id } = req.body;
+    if (!name || !category || !city) {
+      res.status(400).json({ success: false, error: 'Company Name, Category, and City are required' });
+      return;
+    }
+
+    const company = await createCompany({
+      user_id: user.id,
+      name,
+      legal_name,
+      category,
+      city,
+      phone,
+      website,
+      google_place_id,
+    });
+
+    // Send Telegram alert of new business onboarding if enabled
+    const alertMsg = `🏢 *NEW COMPANY ONBOARDED TO ABGA!*\n\n👑 *Owner:* ${user.full_name} (${user.email})\n🏢 *Business:* ${company.name}\n🏷️ *Category:* ${company.category}\n📍 *City:* ${company.city}\n🌐 *Domain:* bga.aaditechs.in`;
+    sendTelegramPushAlert(alertMsg).catch(() => {});
+
+    res.status(201).json({ success: true, company });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Fetch isolated company data (Growth score, audits, competitors, reviews)
+app.get('/api/companies/:id/data', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const company = await getCompanyById(id);
+    if (!company) {
+      res.status(404).json({ success: false, error: 'Company not found' });
+      return;
+    }
+
+    const payload = await getCompanyDataPayload(id);
+    res.json({ success: true, company, data: payload });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Save isolated company data payload
+app.put('/api/companies/:id/data', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data } = req.body;
+    await saveCompanyDataPayload(id, data);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
 
 // AI Chat / Telegram Natural Language endpoint
 app.post('/api/ai/chat', async (req, res) => {
