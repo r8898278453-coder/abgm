@@ -519,14 +519,30 @@ app.get('/api/system/status', (req, res) => {
   });
 });
 
+// Global process exception handlers to prevent unexpected process exit
+process.on('unhandledRejection', (reason) => {
+  console.warn('[Server] Unhandled rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[Server] Uncaught exception:', err);
+});
+
 async function startServer() {
   try {
+    let viteMiddlewares: any = null;
+    let viteInstance: any = null;
+
     if (process.env.NODE_ENV !== 'production') {
-      const vite = await createViteServer({
-        server: { middlewareMode: true },
-        appType: 'spa',
+      app.use((req, res, next) => {
+        if (viteMiddlewares) {
+          return viteMiddlewares(req, res, next);
+        }
+        // Respond to initial container pre-warm and health checks immediately while Vite initializes
+        if (req.path === '/' || req.path === '/api/health') {
+          return res.status(200).send('<!doctype html><html><head><title>Aaditech BGA</title></head><body><div id="root">Initializing Aaditech BGA...</div></body></html>');
+        }
+        next();
       });
-      app.use(vite.middlewares);
     } else {
       const distPath = path.join(process.cwd(), 'dist');
       app.use(express.static(distPath));
@@ -535,9 +551,54 @@ async function startServer() {
       });
     }
 
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`Server running on http://0.0.0.0:${PORT}`);
+    const server = app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server running on http://localhost:${PORT}`);
     });
+
+    server.on('error', (err: any) => {
+      if (err.code === 'EADDRINUSE') {
+        console.warn(`[Server] Port ${PORT} currently in use. Retrying in 1s...`);
+        setTimeout(() => {
+          try {
+            server.close();
+          } catch {}
+          server.listen(PORT, '0.0.0.0');
+        }, 1000);
+      } else {
+        console.error('[Server] Fatal server error:', err);
+      }
+    });
+
+    // Initialize Vite middleware asynchronously so port 3000 is reachable immediately
+    if (process.env.NODE_ENV !== 'production') {
+      createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      })
+        .then((vite) => {
+          viteInstance = vite;
+          viteMiddlewares = vite.middlewares;
+          console.log('[Server] Vite middleware mounted and ready.');
+        })
+        .catch((err) => {
+          console.error('[Server] Error initializing Vite middleware:', err);
+        });
+    }
+
+    const cleanup = async () => {
+      console.log('[Server] Shutting down gracefully...');
+      if (viteInstance) {
+        try {
+          await viteInstance.close();
+        } catch {}
+      }
+      server.close(() => {
+        process.exit(0);
+      });
+    };
+
+    process.on('SIGTERM', cleanup);
+    process.on('SIGINT', cleanup);
   } catch (error) {
     console.error('Fatal error starting server:', error);
     process.exit(1);
@@ -545,3 +606,5 @@ async function startServer() {
 }
 
 startServer();
+
+
