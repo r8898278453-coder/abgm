@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Sparkles, Building2, ShieldCheck, ArrowRight, Lock, Mail, User, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Building2, ShieldCheck, ArrowRight, Lock, Mail, User, CheckCircle2, AlertCircle } from 'lucide-react';
 import { loginUser, registerUser } from '../services/authService';
 import { AuthUser } from '../types';
 
@@ -42,13 +42,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleDemoAdmin = () => {
-    setEmail('admin@aaditechs.in');
-    setPassword('Aaditech@2026');
-    setMode('login');
-    setErrorMessage(null);
   };
 
   return (
@@ -148,7 +141,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="admin@aaditechs.in"
+                  placeholder="name@company.com"
                   className="w-full bg-slate-950/70 border border-slate-700/80 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                 />
               </div>
@@ -210,18 +203,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
               )}
             </button>
           </form>
-
-          {/* Quick Demo Fill Helper */}
-          <div className="mt-6 pt-5 border-t border-slate-800/80 flex flex-col gap-2">
-            <button
-              type="button"
-              onClick={handleDemoAdmin}
-              className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/15 border border-indigo-500/20"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Fill Master Credentials (admin@aaditechs.in)</span>
-            </button>
-          </div>
         </div>
 
         {/* Security Assurance */}

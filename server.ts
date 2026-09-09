@@ -5,6 +5,7 @@ import { GoogleGenAI } from '@google/genai';
 
 import {
   getAllLeads,
+  getLeadById,
   createLead,
   updateLeadStatus,
   sendTelegramPushAlert,
@@ -12,39 +13,30 @@ import {
   findUserById,
   createUser,
   verifyPassword,
+  upgradeUserPassword,
   getUserCompanies,
   getCompanyById,
   createCompany,
   getCompanyDataPayload,
   saveCompanyDataPayload,
+  getDbStatus,
+  getDefaultCompanyId,
 } from './server/db';
+import { generateAuthToken, getAuthUserFromRequest } from './server/auth';
+import {
+  loginProtectionMiddleware,
+  recordFailedLogin,
+  recordSuccessfulLogin,
+  registerRateLimiter,
+  aiRateLimiter,
+  leadsRateLimiter,
+  telegramAlertLimiter,
+} from './server/rateLimiter';
 
 const app = express();
 const PORT = 3000;
 
 app.use(express.json());
-
-// Token helper for session management (Token format: base64(userId:email:timestamp))
-function generateAuthToken(user: { id: string; email: string }): string {
-  const payload = `${user.id}:${user.email}:${Date.now()}`;
-  return Buffer.from(payload).toString('base64');
-}
-
-async function getAuthUserFromRequest(req: express.Request) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return null;
-  }
-  const token = authHeader.split(' ')[1];
-  try {
-    const decoded = Buffer.from(token, 'base64').toString('utf-8');
-    const [userId] = decoded.split(':');
-    if (!userId) return null;
-    return await findUserById(userId);
-  } catch {
-    return null;
-  }
-}
 
 // Initialize Gemini Client safely
 let aiClient: GoogleGenAI | null = null;
@@ -125,8 +117,8 @@ app.get('/api/health', (req, res) => {
 
 // ==================== AUTHENTICATION APIS ==================== //
 
-// Register new user
-app.post('/api/auth/register', async (req, res) => {
+// Register new user (protected with registration rate limiting)
+app.post('/api/auth/register', registerRateLimiter, async (req, res) => {
   try {
     const { email, password, full_name, role } = req.body;
     if (!email || !password || !full_name) {
@@ -163,8 +155,8 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-// User login
-app.post('/api/auth/login', async (req, res) => {
+// User login (protected with rate limiting & brute-force account lockout)
+app.post('/api/auth/login', loginProtectionMiddleware, async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {
@@ -174,15 +166,51 @@ app.post('/api/auth/login', async (req, res) => {
 
     const user = await findUserByEmail(email);
     if (!user) {
-      res.status(401).json({ success: false, error: 'Invalid email or password' });
+      const lockStatus = recordFailedLogin(req, email);
+      if (lockStatus.isLocked) {
+        res.setHeader('Retry-After', (lockStatus.lockedForSeconds || 900).toString());
+        res.status(429).json({
+          success: false,
+          error: 'Account temporarily locked due to 5 consecutive failed login attempts. For security, please try again in 15 minutes.',
+          locked: true,
+          retryAfter: lockStatus.lockedForSeconds,
+        });
+        return;
+      }
+      res.status(401).json({
+        success: false,
+        error: 'Invalid email or password',
+        remainingAttempts: lockStatus.remainingAttempts,
+      });
       return;
     }
 
     const isValid = verifyPassword(password, user.password_hash, user.salt);
     if (!isValid) {
-      res.status(401).json({ success: false, error: 'Invalid email or password' });
+      const lockStatus = recordFailedLogin(req, email);
+      if (lockStatus.isLocked) {
+        res.setHeader('Retry-After', (lockStatus.lockedForSeconds || 900).toString());
+        res.status(429).json({
+          success: false,
+          error: 'Account temporarily locked due to 5 consecutive failed login attempts. For security, please try again in 15 minutes.',
+          locked: true,
+          retryAfter: lockStatus.lockedForSeconds,
+        });
+        return;
+      }
+      res.status(401).json({
+        success: false,
+        error: 'Invalid email or password',
+        remainingAttempts: lockStatus.remainingAttempts,
+      });
       return;
     }
+
+    // Authentication succeeded: clear failed attempts for this email
+    recordSuccessfulLogin(req, email);
+
+    // Transparently upgrade legacy low-iteration hashes to OWASP 210,000 iterations
+    upgradeUserPassword(user.id, password).catch(() => {});
 
     const token = generateAuthToken(user);
     res.json({
@@ -280,10 +308,21 @@ app.post('/api/companies', async (req, res) => {
 // Fetch isolated company data (Growth score, audits, competitors, reviews)
 app.get('/api/companies/:id/data', async (req, res) => {
   try {
+    const user = await getAuthUserFromRequest(req);
+    if (!user) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
+
     const { id } = req.params;
     const company = await getCompanyById(id);
     if (!company) {
       res.status(404).json({ success: false, error: 'Company not found' });
+      return;
+    }
+
+    if (company.user_id !== user.id && user.role !== 'owner') {
+      res.status(403).json({ success: false, error: 'Access denied to this company workspace' });
       return;
     }
 
@@ -297,7 +336,24 @@ app.get('/api/companies/:id/data', async (req, res) => {
 // Save isolated company data payload
 app.put('/api/companies/:id/data', async (req, res) => {
   try {
+    const user = await getAuthUserFromRequest(req);
+    if (!user) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
+
     const { id } = req.params;
+    const company = await getCompanyById(id);
+    if (!company) {
+      res.status(404).json({ success: false, error: 'Company not found' });
+      return;
+    }
+
+    if (company.user_id !== user.id && user.role !== 'owner') {
+      res.status(403).json({ success: false, error: 'Access denied to this company workspace' });
+      return;
+    }
+
     const { data } = req.body;
     await saveCompanyDataPayload(id, data);
     res.json({ success: true });
@@ -307,8 +363,14 @@ app.put('/api/companies/:id/data', async (req, res) => {
 });
 
 
-// AI Chat / Telegram Natural Language endpoint
-app.post('/api/ai/chat', async (req, res) => {
+// AI Chat / Telegram Natural Language endpoint (Protected with Auth + Rate Limiting)
+app.post('/api/ai/chat', aiRateLimiter, async (req, res) => {
+  const user = await getAuthUserFromRequest(req);
+  if (!user) {
+    res.status(401).json({ success: false, error: 'Authentication required to use AI marketing features. Please log in.' });
+    return;
+  }
+
   const { message, context, businessName, category, language } = req.body;
   const prompt = `You are LocalPulse AI, a 24/7 Autonomous AI Marketing & Growth Manager for Aaditech Solution (aaditechs.in).
 Business Name: ${businessName || 'Aaditech Solution'}
@@ -352,8 +414,14 @@ Saare replies Guardrail Safety Check pass kar chuke hain. "Approve All" dabayein
   res.json({ reply: fallbackReply });
 });
 
-// AI Review Reply Generator
-app.post('/api/ai/reply-review', async (req, res) => {
+// AI Review Reply Generator (Protected with Auth + Rate Limiting)
+app.post('/api/ai/reply-review', aiRateLimiter, async (req, res) => {
+  const user = await getAuthUserFromRequest(req);
+  if (!user) {
+    res.status(401).json({ success: false, error: 'Authentication required to use AI review reply generator. Please log in.' });
+    return;
+  }
+
   const { reviewText, rating, reviewerName, tone, language, businessName } = req.body;
   const prompt = `You are drafting a public reply to a client review for "${businessName || 'Aaditech Solution'} (aaditechs.in)".
 Reviewer: ${reviewerName || 'Client'}
@@ -384,8 +452,14 @@ Draft the exact reply text only.`;
   res.json({ replyText: fallback });
 });
 
-// AI Content Studio Generator
-app.post('/api/ai/generate-content', async (req, res) => {
+// AI Content Studio Generator (Protected with Auth + Rate Limiting)
+app.post('/api/ai/generate-content', aiRateLimiter, async (req, res) => {
+  const user = await getAuthUserFromRequest(req);
+  if (!user) {
+    res.status(401).json({ success: false, error: 'Authentication required to use AI content generator. Please log in.' });
+    return;
+  }
+
   const { businessName, category, contentType, platform, offer, language, targetAudience } = req.body;
   const prompt = `Generate a high-converting B2B technology marketing post for Aaditech Solution (aaditechs.in).
 Business Name: ${businessName || 'Aaditech Solution'}
@@ -435,27 +509,92 @@ Provide a JSON-compatible structured response with:
   });
 });
 
-// Production Lead Capture API (bga.aaditechs.in)
+// Production Lead Capture API (bga.aaditechs.in) - Protected with Authentication & IDOR filtering
 app.get('/api/leads', async (req, res) => {
   try {
-    const leads = await getAllLeads();
-    res.json({ success: true, leads });
+    const user = await getAuthUserFromRequest(req);
+    if (!user) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
+
+    const requestedCompanyId = (req.query.companyId || req.query.company_id) as string | undefined;
+
+    // If specific company requested, verify company ownership
+    if (requestedCompanyId && typeof requestedCompanyId === 'string') {
+      const company = await getCompanyById(requestedCompanyId);
+      if (!company) {
+        res.status(404).json({ success: false, error: 'Company not found' });
+        return;
+      }
+      if (company.user_id !== user.id && user.role !== 'owner') {
+        res.status(403).json({ success: false, error: 'Access denied to this company leads' });
+        return;
+      }
+      const leads = await getAllLeads(requestedCompanyId);
+      res.json({ success: true, leads });
+      return;
+    }
+
+    // If no companyId specified:
+    // Global owners can access all leads
+    if (user.role === 'owner') {
+      const leads = await getAllLeads();
+      res.json({ success: true, leads });
+      return;
+    }
+
+    // Non-owners can only see leads belonging to their owned companies
+    const userCompanies = await getUserCompanies(user.id);
+    if (!userCompanies || userCompanies.length === 0) {
+      res.json({ success: true, leads: [] });
+      return;
+    }
+
+    const companyIds = new Set(userCompanies.map((c) => c.id));
+    const allLeads = await getAllLeads();
+    const filtered = allLeads.filter((l) => l.company_id && companyIds.has(l.company_id));
+    res.json({ success: true, leads: filtered });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error?.message });
   }
 });
 
-// Ingest new lead from Website Contact Form, Google 3-Pack Call, or Meta Ads Webhook
-app.post('/api/leads', async (req, res) => {
+// Ingest new lead from Website Contact Form, Google 3-Pack Call, or Meta Ads Webhook (Protected with Rate Limiting & Company Linking)
+app.post('/api/leads', leadsRateLimiter, async (req, res) => {
   try {
     const { name, company, phone, email, service, budget, source, notes } = req.body;
+    let targetCompanyId = (req.body.company_id || req.body.companyId || req.query.company_id || req.query.companyId) as string | undefined;
 
     if (!name || !phone) {
       res.status(400).json({ success: false, error: 'Name and phone number are required' });
       return;
     }
 
+    // 1. If caller is authenticated (e.g. from CRM dashboard), associate with user's verified company
+    const authUser = await getAuthUserFromRequest(req);
+    if (authUser) {
+      const userCompanies = await getUserCompanies(authUser.id);
+      if (userCompanies.length > 0) {
+        if (targetCompanyId) {
+          const userOwnsCompany = userCompanies.some((c) => c.id === targetCompanyId) || authUser.role === 'owner';
+          if (!userOwnsCompany) {
+            // Re-bind to user's first company to prevent cross-tenant leakage
+            targetCompanyId = userCompanies[0].id;
+          }
+        } else {
+          targetCompanyId = userCompanies[0].id;
+        }
+      }
+    }
+
+    // 2. If unauthenticated public contact form or external webhook, resolve to specified or default company
+    if (!targetCompanyId) {
+      targetCompanyId = (await getDefaultCompanyId()) || undefined;
+    }
+
     const newLead = await createLead({
+      company_id: targetCompanyId,
       name,
       company: company || 'Direct Client',
       phone,
@@ -470,7 +609,9 @@ app.post('/api/leads', async (req, res) => {
     });
 
     // Auto-dispatch real Telegram alert to Owner's Phone if configured
-    const alertMsg = `🔥 *NEW HOT LEAD RECEIVED!* (${newLead.source})\n\n👤 *Client:* ${newLead.name}\n🏢 *Company:* ${newLead.company}\n📞 *Phone:* \`${newLead.phone}\`\n💼 *Service:* ${newLead.service}\n💰 *Budget:* ${newLead.budget}\n🎯 *Intent Score:* ${newLead.intent_score}%\n\n📱 *Platform:* bga.aaditechs.in`;
+    const targetComp = newLead.company_id ? await getCompanyById(newLead.company_id) : null;
+    const targetCompName = targetComp?.name || newLead.company || 'Aaditech Client';
+    const alertMsg = `🔥 *NEW HOT LEAD RECEIVED!* (${newLead.source})\n\n🏢 *Target Business:* ${targetCompName}\n👤 *Client:* ${newLead.name}\n🏢 *Client Org:* ${newLead.company}\n📞 *Phone:* \`${newLead.phone}\`\n💼 *Service:* ${newLead.service}\n💰 *Budget:* ${newLead.budget}\n🎯 *Intent Score:* ${newLead.intent_score}%\n\n📱 *Platform:* bga.aaditechs.in`;
     sendTelegramPushAlert(alertMsg).catch(() => {});
 
     res.status(201).json({ success: true, lead: newLead });
@@ -479,11 +620,36 @@ app.post('/api/leads', async (req, res) => {
   }
 });
 
-// Update lead stage
+// Update lead stage - Protected with Authentication & IDOR Verification
 app.patch('/api/leads/:id/stage', async (req, res) => {
   try {
+    const user = await getAuthUserFromRequest(req);
+    if (!user) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
+
     const { id } = req.params;
     const { stage } = req.body;
+
+    const lead = await getLeadById(id);
+    if (!lead) {
+      res.status(404).json({ success: false, error: 'Lead not found' });
+      return;
+    }
+
+    // Verify IDOR authorization
+    if (lead.company_id) {
+      const company = await getCompanyById(lead.company_id);
+      if (company && company.user_id !== user.id && user.role !== 'owner') {
+        res.status(403).json({ success: false, error: 'Access denied to update this lead' });
+        return;
+      }
+    } else if (user.role !== 'owner') {
+      res.status(403).json({ success: false, error: 'Access denied to update global lead' });
+      return;
+    }
+
     const success = await updateLeadStatus(id, stage);
     res.json({ success });
   } catch (error: any) {
@@ -491,9 +657,15 @@ app.patch('/api/leads/:id/stage', async (req, res) => {
   }
 });
 
-// Direct Telegram alert dispatch endpoint
-app.post('/api/telegram/notify', async (req, res) => {
+// Direct Telegram alert dispatch endpoint - Protected with Authentication & Rate Limiting
+app.post('/api/telegram/notify', telegramAlertLimiter, async (req, res) => {
   try {
+    const user = await getAuthUserFromRequest(req);
+    if (!user) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
+
     const { message } = req.body;
     if (!message) {
       res.status(400).json({ success: false, error: 'Message is required' });
@@ -508,11 +680,14 @@ app.post('/api/telegram/notify', async (req, res) => {
 
 // System Deployment & Environment Health Check
 app.get('/api/system/status', (req, res) => {
+  const dbStatus = getDbStatus();
   res.json({
     app: 'Aaditech BGA',
     subdomain: 'bga.aaditechs.in',
     environment: process.env.NODE_ENV || 'development',
-    mysqlConfigured: !!process.env.DB_HOST && !!process.env.DB_NAME,
+    database: dbStatus,
+    mysqlConfigured: dbStatus.configured,
+    mysqlConnected: dbStatus.connected,
     telegramConfigured: !!process.env.TELEGRAM_BOT_TOKEN,
     geminiConfigured: !!process.env.GEMINI_API_KEY,
     timestamp: new Date().toISOString(),

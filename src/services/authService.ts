@@ -1,4 +1,4 @@
-import { AuthUser, CompanyRecord } from '../types';
+import { AuthUser, CompanyRecord, LeadItem } from '../types';
 
 const TOKEN_KEY = 'abga_auth_token';
 const USER_KEY = 'abga_user_profile';
@@ -57,7 +57,7 @@ export function setStoredActiveCompanyId(companyId: string) {
 }
 
 // Fetch helper with Authorization Bearer header
-async function apiRequest<T>(url: string, options: RequestInit = {}): Promise<T> {
+export async function apiRequest<T>(url: string, options: RequestInit = {}): Promise<T> {
   const token = getStoredToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -171,3 +171,29 @@ export async function saveCompanyData(companyId: string, payload: any): Promise<
     return false;
   }
 }
+
+export async function fetchCompanyLeads(companyId?: string): Promise<LeadItem[]> {
+  try {
+    const url = companyId ? `/api/leads?companyId=${encodeURIComponent(companyId)}` : '/api/leads';
+    const res = await apiRequest<{ success: boolean; leads: any[] }>(url);
+    if (res.success && Array.isArray(res.leads)) {
+      return res.leads.map((l) => ({
+        id: l.id,
+        name: l.name,
+        phone: l.phone,
+        serviceRequested: l.service || 'Service Inquiry',
+        date: l.created_at ? new Date(l.created_at).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }) : 'Recently',
+        source: (l.source?.includes('Google') ? 'Google Maps' : l.source?.includes('WhatsApp') ? 'WhatsApp Direct' : 'Website') as any,
+        intentScore: l.intent_score || 85,
+        stage: l.stage || 'new',
+        notes: [l.company, l.budget, l.notes].filter(Boolean).join(' • '),
+        aiSuggestedReply: l.ai_suggested_reply || '',
+      }));
+    }
+    return [];
+  } catch (err) {
+    console.warn('Failed to fetch company leads:', err);
+    return [];
+  }
+}
+

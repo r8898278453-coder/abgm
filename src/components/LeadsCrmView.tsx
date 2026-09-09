@@ -14,15 +14,20 @@ import {
   X,
 } from 'lucide-react';
 import { LeadItem } from '../types';
+import { apiRequest } from '../services/authService';
 
 interface LeadsCrmViewProps {
   leads: LeadItem[];
   onUpdateLeadStage: (leadId: string, stage: LeadItem['stage']) => void;
+  onLeadAdded?: (newLead: LeadItem) => void;
+  companyId?: string;
 }
 
 export const LeadsCrmView: React.FC<LeadsCrmViewProps> = ({
   leads,
   onUpdateLeadStage,
+  onLeadAdded,
+  companyId,
 }) => {
   const [selectedLead, setSelectedLead] = useState<LeadItem>(leads[0]);
   const [replyDraft, setReplyDraft] = useState(leads[0]?.aiSuggestedReply || '');
@@ -60,10 +65,9 @@ export const LeadsCrmView: React.FC<LeadsCrmViewProps> = ({
     // Update state to contacted
     if (lead.stage === 'new') {
       onUpdateLeadStage(lead.id, 'contacted');
-      // Sync with backend API
-      fetch(`/api/leads/${lead.id}/stage`, {
+      // Sync with backend API using authenticated request
+      apiRequest(`/api/leads/${lead.id}/stage`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ stage: 'contacted' }),
       }).catch(() => {});
     }
@@ -79,6 +83,7 @@ export const LeadsCrmView: React.FC<LeadsCrmViewProps> = ({
     setIsSubmittingLead(true);
     try {
       const payload = {
+        company_id: companyId,
         name: newLeadName,
         company: newLeadCompany || 'Direct Client',
         phone: newLeadPhone,
@@ -87,14 +92,12 @@ export const LeadsCrmView: React.FC<LeadsCrmViewProps> = ({
         source: 'bga.aaditechs.in Direct',
       };
 
-      const res = await fetch('/api/leads', {
+      const data = await apiRequest<{ success: boolean; lead: any }>('/api/leads', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
 
-      if (res.ok) {
-        const data = await res.json();
+      if (data && data.lead) {
         const createdLead: LeadItem = {
           id: data.lead.id,
           name: data.lead.name,
@@ -109,6 +112,9 @@ export const LeadsCrmView: React.FC<LeadsCrmViewProps> = ({
         };
         setSelectedLead(createdLead);
         setReplyDraft(createdLead.aiSuggestedReply);
+        if (onLeadAdded) {
+          onLeadAdded(createdLead);
+        }
         setIsAddLeadModalOpen(false);
         setNewLeadName('');
         setNewLeadCompany('');

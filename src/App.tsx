@@ -33,6 +33,7 @@ import {
   fetchUserCompanies,
   fetchCompanyData,
   saveCompanyData,
+  fetchCompanyLeads,
   getStoredActiveCompanyId,
   setStoredActiveCompanyId,
   checkAuthSession,
@@ -152,6 +153,16 @@ export default function App() {
       if (payload.posts) setContentPosts(payload.posts);
       if (payload.campaigns) setCampaigns(payload.campaigns);
       if (payload.autonomous_actions) setActions(payload.autonomous_actions);
+    }
+
+    // Load isolated leads for this specific company
+    const companyLeads = await fetchCompanyLeads(comp.id);
+    if (companyLeads && companyLeads.length > 0) {
+      setLeads(companyLeads);
+    } else if (payload && payload.leads) {
+      setLeads(payload.leads);
+    } else {
+      setLeads([]);
     }
   };
 
