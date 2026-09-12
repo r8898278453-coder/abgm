@@ -17,6 +17,9 @@ import {
   Facebook,
   Globe,
   CheckCircle2,
+  Database,
+  Trash2,
+  ArrowRight,
 } from 'lucide-react';
 import { BusinessProfile, ContentPost } from '../types';
 import { generateMarketingContent } from '../services/aiService';
@@ -24,14 +27,20 @@ import { generateMarketingContent } from '../services/aiService';
 interface ContentStudioViewProps {
   business: BusinessProfile;
   posts: ContentPost[];
+  companyId?: string;
   onAddNewPost: (post: ContentPost) => void;
+  onPublishPost?: (postId: string) => void;
+  onDeletePost?: (postId: string) => void;
   onNavigate: (tab: any) => void;
 }
 
 export const ContentStudioView: React.FC<ContentStudioViewProps> = ({
   business,
   posts,
+  companyId,
   onAddNewPost,
+  onPublishPost,
+  onDeletePost,
   onNavigate,
 }) => {
   const [contentType, setContentType] = useState<'offer' | 'festival' | 'service' | 'educational'>('offer');
@@ -41,8 +50,16 @@ export const ContentStudioView: React.FC<ContentStudioViewProps> = ({
   >('Hinglish');
   const [customPrompt, setCustomPrompt] = useState('Weekend 30-Min Fast Laptop Diagnostic & 20% Off Screen Replacement');
   const [isGenerating, setIsGenerating] = useState(false);
-  const [activeTab, setActiveTab] = useState<'copywriter' | 'creative' | 'reel'>('copywriter');
+  const [activeTab, setActiveTab] = useState<'copywriter' | 'creative' | 'reel' | 'posts'>('copywriter');
   const [scheduleSuccessToast, setScheduleSuccessToast] = useState<string | null>(null);
+  const [postFilter, setPostFilter] = useState<'all' | 'scheduled' | 'published'>('all');
+
+  // Scheduling State
+  const [scheduleDate, setScheduleDate] = useState(() => {
+    const tomorrow = new Date(Date.now() + 86400000);
+    return tomorrow.toISOString().split('T')[0];
+  });
+  const [scheduleTimeSlot, setScheduleTimeSlot] = useState('11:00 AM');
 
   // Generated state
   const [generatedPost, setGeneratedPost] = useState<Partial<ContentPost>>({
@@ -95,12 +112,12 @@ export const ContentStudioView: React.FC<ContentStudioViewProps> = ({
       hashtags: generatedPost.hashtags || [],
       imageUrl: generatedPost.imageUrl || '',
       status: 'scheduled',
-      scheduledDate: '2026-09-08',
-      timeSlot: '11:00 AM',
+      scheduledDate: scheduleDate,
+      timeSlot: scheduleTimeSlot,
       reelScript: generatedPost.reelScript,
     };
     onAddNewPost(newPost);
-    setScheduleSuccessToast(`✓ Post "${newPost.title}" scheduled & synced to ${targetPlatform.toUpperCase()}!`);
+    setScheduleSuccessToast(`✓ Post "${newPost.title}" scheduled & saved to MySQL database!`);
     setTimeout(() => setScheduleSuccessToast(null), 5000);
   };
 
@@ -124,10 +141,16 @@ export const ContentStudioView: React.FC<ContentStudioViewProps> = ({
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-black text-slate-900 flex items-center gap-2">
-            <Sparkles className="w-7 h-7 text-indigo-600" />
-            AI Content Studio & Reel Engine
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-black text-slate-900 flex items-center gap-2">
+              <Sparkles className="w-7 h-7 text-indigo-600" />
+              AI Content Studio & Reel Engine
+            </h1>
+            <span className="hidden md:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
+              <Database className="w-3 h-3 text-emerald-600" />
+              MySQL Synced
+            </span>
+          </div>
           <p className="text-slate-500 text-xs sm:text-sm mt-0.5">
             Autonomous multi-lingual copywriter, brand kit creative designer, and 15s video reel director.
           </p>
@@ -159,11 +182,171 @@ export const ContentStudioView: React.FC<ContentStudioViewProps> = ({
           >
             Reel Script Engine
           </button>
+          <button
+            onClick={() => setActiveTab('posts')}
+            className={`px-3.5 py-1.5 rounded-xl font-bold transition flex items-center gap-1.5 ${
+              activeTab === 'posts' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Database className="w-3 h-3" />
+            <span>Posts Queue ({posts.length})</span>
+          </button>
         </div>
       </div>
 
-      {/* Main Studio Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      {/* Content Body: Either Posts Queue or Main Studio Grid */}
+      {activeTab === 'posts' ? (
+        <div className="space-y-4">
+          {/* Controls Bar in Bento Card */}
+          <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-700">Filter Posts:</span>
+              <div className="flex items-center gap-1.5 text-xs">
+                {(['all', 'scheduled', 'published'] as const).map((filter) => (
+                  <button
+                    key={filter}
+                    onClick={() => setPostFilter(filter)}
+                    className={`px-3 py-1 rounded-xl font-bold transition capitalize ${
+                      postFilter === filter
+                        ? 'bg-indigo-600 text-white shadow-xs'
+                        : 'bg-slate-50 text-slate-600 hover:text-slate-900 border border-slate-200'
+                    }`}
+                  >
+                    {filter === 'all'
+                      ? `All (${posts.length})`
+                      : filter === 'scheduled'
+                      ? `Scheduled (${posts.filter((p) => p.status === 'scheduled').length})`
+                      : `Published (${posts.filter((p) => p.status === 'published').length})`}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 text-xs">
+              <button
+                onClick={() => onNavigate('calendar')}
+                className="px-3.5 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 rounded-xl font-bold border border-slate-200 transition flex items-center gap-1.5"
+              >
+                <Calendar className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Open Calendar View</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('copywriter')}
+                className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition shadow-xs flex items-center gap-1.5"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Create New Post</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Posts List */}
+          {posts.filter((p) => postFilter === 'all' || p.status === postFilter).length === 0 ? (
+            <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto">
+                <Database className="w-6 h-6" />
+              </div>
+              <div className="font-bold text-slate-900 text-sm">No Content Posts Found</div>
+              <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                No posts match the current filter. Use the AI Copywriter or Branded Creative tabs to draft and schedule posts.
+              </p>
+              <button
+                onClick={() => setActiveTab('copywriter')}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition shadow-xs inline-flex items-center gap-2"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                Generate New AI Post
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {posts
+                .filter((p) => postFilter === 'all' || p.status === postFilter)
+                .map((post) => (
+                  <div
+                    key={post.id}
+                    className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm space-y-3 hover:shadow-md transition flex flex-col justify-between"
+                  >
+                    <div className="space-y-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="font-black text-sm text-slate-900 line-clamp-1">{post.title}</div>
+                          <div className="text-[11px] text-slate-500 flex items-center gap-1.5 mt-0.5">
+                            <Clock className="w-3 h-3 text-slate-400" />
+                            <span>
+                              {post.scheduledDate} • {post.timeSlot}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full capitalize ${
+                              post.status === 'published'
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-amber-50 text-amber-700 border border-amber-200'
+                            }`}
+                          >
+                            {post.status}
+                          </span>
+                          {onDeletePost && (
+                            <button
+                              onClick={() => {
+                                if (window.confirm(`Delete post "${post.title}" from MySQL?`)) {
+                                  onDeletePost(post.id);
+                                }
+                              }}
+                              className="text-slate-400 hover:text-rose-600 p-1 rounded-lg hover:bg-rose-50 transition"
+                              title="Delete Post from MySQL"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {post.headline && (
+                        <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 text-xs font-bold text-slate-900 leading-snug">
+                          {post.headline}
+                        </div>
+                      )}
+
+                      <p className="text-xs text-slate-600 line-clamp-3 leading-relaxed">
+                        {post.caption}
+                      </p>
+
+                      <div className="flex flex-wrap gap-1">
+                        {post.platforms?.map((plat) => (
+                          <span
+                            key={plat}
+                            className="bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase"
+                          >
+                            {plat}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+                      <span className="text-[10px] text-slate-400 font-mono">ID: {post.id}</span>
+                      {post.status === 'scheduled' && onPublishPost && (
+                        <button
+                          onClick={() => onPublishPost(post.id)}
+                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center gap-1.5"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Publish to MySQL Now</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        /* Main Studio Grid */
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left: Input & Strategy Controls (5 Cols) in Bento Card */}
         <div className="lg:col-span-5 space-y-4">
           <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
@@ -322,12 +505,34 @@ export const ContentStudioView: React.FC<ContentStudioViewProps> = ({
                     {language}
                   </span>
                 </div>
-                <button
-                  onClick={handleSchedulePost}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-3.5 py-2 rounded-xl flex items-center gap-1.5 transition shadow-xs"
-                >
-                  <Send className="w-3 h-3" /> Schedule & Publish
-                </button>
+                <div className="flex items-center gap-2">
+                  <div className="hidden sm:flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-[11px]">
+                    <Clock className="w-3 h-3 text-slate-400" />
+                    <input
+                      type="date"
+                      value={scheduleDate}
+                      onChange={(e) => setScheduleDate(e.target.value)}
+                      className="bg-transparent border-none text-slate-700 font-medium focus:outline-none text-[11px]"
+                    />
+                    <select
+                      value={scheduleTimeSlot}
+                      onChange={(e) => setScheduleTimeSlot(e.target.value)}
+                      className="bg-transparent border-none text-slate-700 font-medium focus:outline-none text-[11px]"
+                    >
+                      <option value="09:00 AM">09:00 AM</option>
+                      <option value="11:00 AM">11:00 AM</option>
+                      <option value="02:30 PM">02:30 PM</option>
+                      <option value="06:00 PM">06:00 PM</option>
+                      <option value="08:00 PM">08:00 PM</option>
+                    </select>
+                  </div>
+                  <button
+                    onClick={handleSchedulePost}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-3.5 py-2 rounded-xl flex items-center gap-1.5 transition shadow-xs whitespace-nowrap"
+                  >
+                    <Send className="w-3 h-3" /> Save to MySQL
+                  </button>
+                </div>
               </div>
 
               {/* Headline */}
@@ -470,6 +675,7 @@ export const ContentStudioView: React.FC<ContentStudioViewProps> = ({
           )}
         </div>
       </div>
+      )}
     </div>
   );
 };

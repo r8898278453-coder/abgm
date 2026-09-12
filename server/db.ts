@@ -57,6 +57,57 @@ export interface DbCompanyData {
   updated_at?: string;
 }
 
+export interface DbReview {
+  id: string;
+  company_id: string;
+  author: string;
+  rating: number;
+  date: string;
+  relative_time?: string;
+  content: string;
+  sentiment: 'positive' | 'neutral' | 'negative';
+  topic?: string;
+  is_operational_issue?: boolean;
+  replied: boolean;
+  reply_text?: string;
+  reply_date?: string;
+  source: 'google' | 'facebook' | 'justdial';
+  created_at?: string;
+}
+
+export interface DbContentPost {
+  id: string;
+  company_id: string;
+  title?: string;
+  type?: string;
+  platforms?: string[];
+  channel?: string;
+  headline?: string;
+  caption: string;
+  cta?: string;
+  image_url?: string;
+  status: 'draft' | 'pending_approval' | 'scheduled' | 'published';
+  scheduled_date?: string;
+  scheduled_time?: string;
+  time_slot?: string;
+  hashtags?: string[];
+  reel_script?: any[];
+  created_at?: string;
+}
+
+export interface DbIntegration {
+  id: string;
+  company_id: string;
+  provider: string;
+  status: 'connected' | 'disconnected' | 'error';
+  credentials?: Record<string, any>;
+  config?: Record<string, any>;
+  last_tested_at?: string | null;
+  last_error?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
 let pool: mysql.Pool | null = null;
 let isMySqlAvailable = false;
 let tablesInitialized = false;
@@ -188,6 +239,143 @@ const defaultSeedCompany: DbCompany = {
 const inMemoryCompanies: DbCompany[] = [defaultSeedCompany];
 const inMemoryCompanyData: Record<string, DbCompanyData> = {};
 const inMemoryLeads: DbLead[] = [];
+
+export const defaultSeedReviews: DbReview[] = [
+  {
+    id: 'rev_1',
+    company_id: 'comp_aaditech_main',
+    author: 'Rajesh Singhania (Singhania Logistics)',
+    rating: 5,
+    date: '2026-09-03',
+    relative_time: 'Yesterday',
+    content: 'Aaditech Solution built our complete fleet tracking portal and dispatch software. Their team in Thane delivered within 4 weeks and provided seamless training. Super professional and responsive team!',
+    sentiment: 'positive',
+    topic: 'Custom Logistics Software & Fast Delivery',
+    is_operational_issue: false,
+    replied: false,
+    source: 'google',
+  },
+  {
+    id: 'rev_2',
+    company_id: 'comp_aaditech_main',
+    author: 'Dr. Neha Patwardhan (Patwardhan Dental Care)',
+    rating: 5,
+    date: '2026-09-02',
+    relative_time: '2 days ago',
+    content: 'They developed our clinic website and set up automated WhatsApp appointment booking. Within 3 weeks of their Local SEO work, our clinic is ranking #1 on Google Maps in our area. Huge boost in patient inquiries!',
+    sentiment: 'positive',
+    topic: 'Clinic Website, WhatsApp Booking & Local SEO',
+    is_operational_issue: false,
+    replied: false,
+    source: 'google',
+  },
+  {
+    id: 'rev_3',
+    company_id: 'comp_aaditech_main',
+    author: 'Kunal Gokhale (Apex Retailers)',
+    rating: 4,
+    date: '2026-09-01',
+    relative_time: '3 days ago',
+    content: 'Great experience with our e-commerce Android app development. App is fast and smooth. Took slightly longer for Google Play Store verification than expected, but Aaditech handled all compliance smoothly.',
+    sentiment: 'positive',
+    topic: 'Android App & Play Store Deployment',
+    is_operational_issue: false,
+    replied: false,
+    source: 'google',
+  },
+  {
+    id: 'rev_4',
+    company_id: 'comp_aaditech_main',
+    author: 'Sunil Nair (Nair Financial Consultancy)',
+    rating: 5,
+    date: '2026-08-30',
+    relative_time: '5 days ago',
+    content: 'Top-notch IT AMC and cloud server migration. Aaditech migrated our database to a secure cloud server with zero downtime. Reliable IT support in Mumbai MMR.',
+    sentiment: 'positive',
+    topic: 'Cloud Migration & IT Support',
+    is_operational_issue: false,
+    replied: true,
+    reply_text: 'Thank you Sunil ji! We are committed to keeping your financial data secure and your business infrastructure running at 99.9% uptime.',
+    reply_date: '2026-08-31',
+    source: 'google',
+  },
+  {
+    id: 'rev_5',
+    company_id: 'comp_aaditech_main',
+    author: 'Vikram Joshi (Joshi Engineering Works)',
+    rating: 3,
+    date: '2026-08-27',
+    relative_time: '8 days ago',
+    content: 'Website design is modern and clean. Minor delay during the initial revision phase, but final output is good.',
+    sentiment: 'neutral',
+    topic: 'Design Revisions & Timelines',
+    is_operational_issue: false,
+    replied: false,
+    source: 'google',
+  },
+];
+
+export const defaultSeedPosts: DbContentPost[] = [
+  {
+    id: 'post_1',
+    company_id: 'comp_aaditech_main',
+    title: 'Transform Your Business with Custom Web & Mobile App in 2026',
+    type: 'offer',
+    platforms: ['google', 'instagram', 'facebook', 'whatsapp'],
+    channel: 'google',
+    headline: '🚀 Upgrade Your Business with a High-Converting Website & Custom Android App!',
+    caption: 'Are outdated tools slowing down your business growth? 💻 At Aaditech Solution (aaditechs.in), we craft high-speed business websites, custom Android/iOS applications, and automated WhatsApp CRM solutions that convert visitors into loyal paying customers. Book your free IT consultation today!',
+    cta: 'Book Free Consultation on WhatsApp',
+    hashtags: ['#AaditechSolution', '#WebDevelopment', '#AppDeveloperMumbai', '#LocalSEO', '#BusinessGrowth'],
+    image_url: 'https://images.unsplash.com/photo-1460925895917-afdab827c52f?auto=format&fit=crop&w=600&q=80',
+    status: 'scheduled',
+    scheduled_date: '2026-09-06',
+    scheduled_time: '2026-09-06 10:30:00',
+    time_slot: '10:30 AM',
+    reel_script: [
+      { scene: '0-4s', visual: 'Business owner overwhelmed by messy paper registers and manual customer inquiries', audio: 'Still managing your business customer inquiries manually in 2026?' },
+      { scene: '4-9s', visual: 'Smooth modern dashboard on laptop and sleek Android mobile app designed by Aaditech', audio: 'Automate your lead pipeline with a custom website and WhatsApp booking engine by Aaditech Solution.' },
+      { scene: '9-15s', visual: 'Happy business owner checking Google 3-Pack #1 ranking on smartphone', audio: 'Get your customized business technology stack today. Visit aaditechs.in or WhatsApp us!' },
+    ],
+  },
+  {
+    id: 'post_2',
+    company_id: 'comp_aaditech_main',
+    title: 'Google 3-Pack Dominance Case Study for Local Businesses',
+    type: 'service',
+    platforms: ['google', 'instagram', 'facebook'],
+    channel: 'google',
+    headline: '📈 How We Helped a Local Clinic Rank #1 on Google Maps in 21 Days',
+    caption: 'Discover how Aaditech Solution optimized Google Business Profile, fixed citation inconsistencies, and automated client review requests to generate 180+ monthly patient calls.',
+    cta: 'Read Full Case Study on aaditechs.in',
+    hashtags: ['#GoogleMapsRanking', '#LocalSEOThane', '#DigitalMarketingIndia', '#Aaditech'],
+    image_url: 'https://images.unsplash.com/photo-1551836022-d5d88e9218df?auto=format&fit=crop&w=600&q=80',
+    status: 'published',
+    scheduled_date: '2026-09-02',
+    scheduled_time: '2026-09-02 11:00:00',
+    time_slot: '11:00 AM',
+  },
+  {
+    id: 'post_3',
+    company_id: 'comp_aaditech_main',
+    title: '5 Costly Mistakes Indian Businesses Make with Outdated Websites',
+    type: 'educational',
+    platforms: ['google', 'instagram', 'facebook', 'whatsapp'],
+    channel: 'instagram',
+    headline: '⚠️ Is Your Business Website Losing 70% of Mobile Visitors?',
+    caption: 'Slow loading speeds, lack of WhatsApp direct-chat buttons, and unoptimized Google Maps locations cost Thane businesses thousands in lost sales every week. Learn how to fix them.',
+    cta: 'Get Free Website Audit Report',
+    hashtags: ['#WebsiteAudit', '#SmallBusinessIndia', '#AaditechSolution', '#TechTips'],
+    image_url: 'https://images.unsplash.com/photo-1507238691740-187a5b1d37b8?auto=format&fit=crop&w=600&q=80',
+    status: 'scheduled',
+    scheduled_date: '2026-09-08',
+    scheduled_time: '2026-09-08 17:00:00',
+    time_slot: '5:00 PM',
+  },
+];
+
+const inMemoryReviews: DbReview[] = [...defaultSeedReviews];
+const inMemoryContentPosts: DbContentPost[] = [...defaultSeedPosts];
 
 /**
  * Returns the primary/default company ID from MySQL or in-memory fallback.
@@ -348,28 +536,36 @@ async function autoInitializeTables(dbPool: mysql.Pool) {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
       `);
 
-      // Proactive Self-Healing Migration:
-      // If leads table exists from a legacy schema.sql import without company_id column,
-      // dynamically verify and add the column & index to prevent unknown column runtime errors!
-      try {
-        const [leadColumns]: any = await connection.query(`
-          SELECT COLUMN_NAME
-          FROM INFORMATION_SCHEMA.COLUMNS
-          WHERE TABLE_SCHEMA = DATABASE()
-            AND TABLE_NAME = 'leads'
-            AND COLUMN_NAME = 'company_id'
-        `);
-        if (!leadColumns || leadColumns.length === 0) {
-          console.log('[Hostinger MySQL] Self-healing schema: Adding missing company_id column to leads table...');
-          await connection.query(`
-            ALTER TABLE leads
-            ADD COLUMN company_id VARCHAR(64) DEFAULT NULL AFTER id,
-            ADD INDEX idx_company_lead (company_id)
-          `);
-          console.log('[Hostinger MySQL] Self-healing complete: company_id column added to leads table.');
+      // Proactive Self-Healing Migrations:
+      // Verify and add company_id columns & indexes across child tables if imported from legacy schemas
+      const tablesToCheck = [
+        { table: 'leads', col: 'company_id', idx: 'idx_company_lead' },
+        { table: 'reviews', col: 'company_id', idx: 'idx_company_review' },
+        { table: 'content_posts', col: 'company_id', idx: 'idx_company_post' },
+        { table: 'autonomous_actions', col: 'company_id', idx: 'idx_company_action' },
+      ];
+
+      for (const { table, col, idx } of tablesToCheck) {
+        try {
+          const [cols]: any = await connection.query(`
+            SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = ?
+              AND COLUMN_NAME = ?
+          `, [table, col]);
+          if (!cols || cols.length === 0) {
+            console.log(`[Hostinger MySQL] Self-healing schema: Adding missing ${col} column to ${table}...`);
+            await connection.query(`
+              ALTER TABLE \`${table}\`
+              ADD COLUMN \`${col}\` VARCHAR(64) DEFAULT NULL AFTER id,
+              ADD INDEX \`${idx}\` (\`${col}\`)
+            `);
+            console.log(`[Hostinger MySQL] Self-healing complete: ${col} column and index added to ${table}.`);
+          }
+        } catch (colErr: any) {
+          console.warn(`[Hostinger MySQL] Column verification notice for ${table}:`, colErr?.message);
         }
-      } catch (colErr: any) {
-        console.warn('[Hostinger MySQL] Leads column verification notice:', colErr?.message);
       }
 
       // 5. Reviews table
@@ -399,16 +595,54 @@ async function autoInitializeTables(dbPool: mysql.Pool) {
         CREATE TABLE IF NOT EXISTS content_posts (
           id VARCHAR(64) PRIMARY KEY,
           company_id VARCHAR(64) DEFAULT NULL,
-          channel VARCHAR(64) NOT NULL,
+          title VARCHAR(255) DEFAULT NULL,
+          type VARCHAR(64) DEFAULT 'offer',
+          platforms TEXT DEFAULT NULL,
+          channel VARCHAR(64) NOT NULL DEFAULT 'google',
+          headline VARCHAR(255) DEFAULT NULL,
           caption TEXT NOT NULL,
+          cta VARCHAR(255) DEFAULT NULL,
           image_url TEXT,
           status VARCHAR(32) DEFAULT 'scheduled',
-          scheduled_time VARCHAR(64) NOT NULL,
+          scheduled_date VARCHAR(64) DEFAULT NULL,
+          scheduled_time VARCHAR(64) DEFAULT NULL,
+          time_slot VARCHAR(64) DEFAULT NULL,
           hashtags TEXT,
+          reel_script TEXT DEFAULT NULL,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           INDEX idx_company_post (company_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
       `);
+
+      // Self-heal extended columns on content_posts if table already existed with minimal columns
+      const postColumnsToCheck = [
+        { col: 'title', def: 'VARCHAR(255) DEFAULT NULL AFTER company_id' },
+        { col: 'type', def: "VARCHAR(64) DEFAULT 'offer' AFTER title" },
+        { col: 'platforms', def: 'TEXT DEFAULT NULL AFTER type' },
+        { col: 'headline', def: 'VARCHAR(255) DEFAULT NULL AFTER channel' },
+        { col: 'cta', def: 'VARCHAR(255) DEFAULT NULL AFTER caption' },
+        { col: 'scheduled_date', def: 'VARCHAR(64) DEFAULT NULL AFTER status' },
+        { col: 'time_slot', def: 'VARCHAR(64) DEFAULT NULL AFTER scheduled_time' },
+        { col: 'reel_script', def: 'TEXT DEFAULT NULL AFTER hashtags' },
+      ];
+
+      for (const { col, def } of postColumnsToCheck) {
+        try {
+          const [cols]: any = await connection.query(`
+            SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'content_posts'
+              AND COLUMN_NAME = ?
+          `, [col]);
+          if (!cols || cols.length === 0) {
+            console.log(`[Hostinger MySQL] Self-healing schema: Adding missing column ${col} to content_posts...`);
+            await connection.query(`ALTER TABLE content_posts ADD COLUMN \`${col}\` ${def}`);
+          }
+        } catch (colErr: any) {
+          console.warn(`[Hostinger MySQL] Column check warning for content_posts.${col}:`, colErr?.message);
+        }
+      }
 
       // 7. Autonomous Actions table
       await connection.query(`
@@ -441,6 +675,24 @@ async function autoInitializeTables(dbPool: mysql.Pool) {
           services_json JSON,
           settings_json JSON,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+      `);
+
+      // 9. Company Integrations table (Real API credentials & live verification)
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS company_integrations (
+          id VARCHAR(64) PRIMARY KEY,
+          company_id VARCHAR(64) NOT NULL,
+          provider VARCHAR(64) NOT NULL,
+          status VARCHAR(32) NOT NULL DEFAULT 'disconnected',
+          credentials TEXT,
+          config TEXT,
+          last_tested_at VARCHAR(64),
+          last_error TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          UNIQUE KEY idx_company_provider (company_id, provider),
+          INDEX idx_comp_integ (company_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
       `);
 
@@ -497,13 +749,16 @@ export async function createUser(data: {
   role?: 'owner' | 'manager' | 'agency';
 }): Promise<DbUser> {
   const { hash, salt } = hashPassword(data.password);
+  const allowedRoles = ['owner', 'manager', 'agency'] as const;
+  const safeRole: DbUser['role'] = (data.role && allowedRoles.includes(data.role as any)) ? data.role : 'owner';
+
   const newUser: DbUser = {
     id: `usr_${crypto.randomUUID().replace(/-/g, '')}`,
     email: data.email.toLowerCase().trim(),
     password_hash: hash,
     salt,
     full_name: data.full_name.trim(),
-    role: data.role || 'owner',
+    role: safeRole,
     created_at: new Date().toISOString(),
   };
 
@@ -826,4 +1081,530 @@ export async function sendTelegramPushAlert(message: string): Promise<boolean> {
     return false;
   }
 }
+
+// ---------------- INTEGRATIONS MANAGEMENT ---------------- //
+
+const inMemoryIntegrations: DbIntegration[] = [];
+
+export async function getCompanyIntegrations(companyId: string): Promise<DbIntegration[]> {
+  try {
+    const db = await getDbPool();
+    if (db) {
+      const [rows]: any = await db.query(
+        'SELECT id, company_id, provider, status, credentials, config, last_tested_at, last_error, created_at, updated_at FROM company_integrations WHERE company_id = ?',
+        [companyId]
+      );
+      return rows.map((r: any) => ({
+        ...r,
+        credentials: r.credentials ? (typeof r.credentials === 'string' ? JSON.parse(r.credentials) : r.credentials) : {},
+        config: r.config ? (typeof r.config === 'string' ? JSON.parse(r.config) : r.config) : {},
+      }));
+    }
+  } catch (err: any) {
+    console.warn('[getCompanyIntegrations] MySQL error:', err?.message);
+  }
+
+  return inMemoryIntegrations.filter((i) => i.company_id === companyId);
+}
+
+export async function getCompanyIntegration(companyId: string, provider: string): Promise<DbIntegration | null> {
+  try {
+    const db = await getDbPool();
+    if (db) {
+      const [rows]: any = await db.query(
+        'SELECT id, company_id, provider, status, credentials, config, last_tested_at, last_error, created_at, updated_at FROM company_integrations WHERE company_id = ? AND provider = ? LIMIT 1',
+        [companyId, provider]
+      );
+      if (rows && rows.length > 0) {
+        const r = rows[0];
+        return {
+          ...r,
+          credentials: r.credentials ? (typeof r.credentials === 'string' ? JSON.parse(r.credentials) : r.credentials) : {},
+          config: r.config ? (typeof r.config === 'string' ? JSON.parse(r.config) : r.config) : {},
+        };
+      }
+      return null;
+    }
+  } catch (err: any) {
+    console.warn('[getCompanyIntegration] MySQL error:', err?.message);
+  }
+
+  return inMemoryIntegrations.find((i) => i.company_id === companyId && i.provider === provider) || null;
+}
+
+export async function saveCompanyIntegration(
+  companyId: string,
+  provider: string,
+  data: {
+    status: 'connected' | 'disconnected' | 'error';
+    credentials?: Record<string, any>;
+    config?: Record<string, any>;
+    last_tested_at?: string;
+    last_error?: string | null;
+  }
+): Promise<DbIntegration> {
+  const id = `int_${crypto.randomUUID().replace(/-/g, '')}`;
+  const credsJson = JSON.stringify(data.credentials || {});
+  const configJson = JSON.stringify(data.config || {});
+  const now = new Date().toISOString();
+
+  try {
+    const db = await getDbPool();
+    if (db) {
+      await db.query(
+        `INSERT INTO company_integrations (id, company_id, provider, status, credentials, config, last_tested_at, last_error)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           status = VALUES(status),
+           credentials = VALUES(credentials),
+           config = VALUES(config),
+           last_tested_at = VALUES(last_tested_at),
+           last_error = VALUES(last_error)`,
+        [id, companyId, provider, data.status, credsJson, configJson, data.last_tested_at || now, data.last_error || null]
+      );
+    }
+  } catch (err: any) {
+    console.warn('[saveCompanyIntegration] MySQL error:', err?.message);
+  }
+
+  const existingIdx = inMemoryIntegrations.findIndex((i) => i.company_id === companyId && i.provider === provider);
+  const record: DbIntegration = {
+    id: existingIdx >= 0 ? inMemoryIntegrations[existingIdx].id : id,
+    company_id: companyId,
+    provider,
+    status: data.status,
+    credentials: data.credentials || {},
+    config: data.config || {},
+    last_tested_at: data.last_tested_at || now,
+    last_error: data.last_error || null,
+    updated_at: now,
+  };
+
+  if (existingIdx >= 0) {
+    inMemoryIntegrations[existingIdx] = record;
+  } else {
+    inMemoryIntegrations.push(record);
+  }
+
+  return record;
+}
+
+export async function deleteCompanyIntegration(companyId: string, provider: string): Promise<boolean> {
+  try {
+    const db = await getDbPool();
+    if (db) {
+      await db.query('DELETE FROM company_integrations WHERE company_id = ? AND provider = ?', [companyId, provider]);
+      return true;
+    }
+  } catch (err: any) {
+    console.warn('[deleteCompanyIntegration] MySQL error:', err?.message);
+  }
+
+  const idx = inMemoryIntegrations.findIndex((i) => i.company_id === companyId && i.provider === provider);
+  if (idx >= 0) {
+    inMemoryIntegrations.splice(idx, 1);
+    return true;
+  }
+  return false;
+}
+
+// ---------------- REVIEWS MANAGEMENT (PER-TENANT MYSQL PERSISTENCE) ---------------- //
+
+export async function getCompanyReviews(companyId?: string): Promise<DbReview[]> {
+  try {
+    const db = await getDbPool();
+    if (db) {
+      const targetCompanyId = companyId || (await getDefaultCompanyId()) || 'comp_aaditech_main';
+      
+      // Auto-seed into MySQL if empty for the primary default company
+      const [countRows]: any = await db.query('SELECT COUNT(*) as count FROM reviews WHERE company_id = ?', [targetCompanyId]);
+      if ((!countRows || countRows[0]?.count === 0) && (targetCompanyId === 'comp_aaditech_main' || targetCompanyId.includes('aaditech'))) {
+        for (const seedRev of defaultSeedReviews) {
+          await db.query(
+            `INSERT IGNORE INTO reviews (id, company_id, author, rating, date, relative_time, content, sentiment, topic, is_operational_issue, replied, reply_text, reply_date, source)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              seedRev.id,
+              targetCompanyId,
+              seedRev.author,
+              seedRev.rating,
+              seedRev.date,
+              seedRev.relative_time || null,
+              seedRev.content,
+              seedRev.sentiment,
+              seedRev.topic || null,
+              seedRev.is_operational_issue ? 1 : 0,
+              seedRev.replied ? 1 : 0,
+              seedRev.reply_text || null,
+              seedRev.reply_date || null,
+              seedRev.source,
+            ]
+          );
+        }
+      }
+
+      const [rows]: any = await db.query('SELECT * FROM reviews WHERE company_id = ? ORDER BY date DESC, created_at DESC', [targetCompanyId]);
+      return rows.map((r: any) => ({
+        ...r,
+        rating: Number(r.rating) || 5,
+        is_operational_issue: Boolean(r.is_operational_issue),
+        replied: Boolean(r.replied),
+      }));
+    }
+  } catch (err: any) {
+    console.warn('[getCompanyReviews] MySQL error, using fallback:', err?.message);
+  }
+
+  const targetId = companyId || 'comp_aaditech_main';
+  return inMemoryReviews.filter((r) => r.company_id === targetId);
+}
+
+export async function getReviewById(id: string): Promise<DbReview | null> {
+  try {
+    const db = await getDbPool();
+    if (db) {
+      const [rows]: any = await db.query('SELECT * FROM reviews WHERE id = ? LIMIT 1', [id]);
+      if (rows && rows.length > 0) {
+        const r = rows[0];
+        return {
+          ...r,
+          rating: Number(r.rating) || 5,
+          is_operational_issue: Boolean(r.is_operational_issue),
+          replied: Boolean(r.replied),
+        };
+      }
+      return null;
+    }
+  } catch (err: any) {
+    console.warn('[getReviewById] MySQL error:', err?.message);
+  }
+
+  return inMemoryReviews.find((r) => r.id === id) || null;
+}
+
+export async function createReview(review: Omit<DbReview, 'id'> & { id?: string }): Promise<DbReview> {
+  const newReview: DbReview = {
+    id: review.id || `rev_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`,
+    company_id: review.company_id || (await getDefaultCompanyId()) || 'comp_aaditech_main',
+    author: review.author,
+    rating: Number(review.rating) || 5,
+    date: review.date || new Date().toISOString().split('T')[0],
+    relative_time: review.relative_time || 'Recently',
+    content: review.content,
+    sentiment: review.sentiment || (Number(review.rating) >= 4 ? 'positive' : Number(review.rating) === 3 ? 'neutral' : 'negative'),
+    topic: review.topic || 'General Feedback',
+    is_operational_issue: Boolean(review.is_operational_issue),
+    replied: Boolean(review.replied),
+    reply_text: review.reply_text || undefined,
+    reply_date: review.reply_date || undefined,
+    source: review.source || 'google',
+    created_at: new Date().toISOString(),
+  };
+
+  try {
+    const db = await getDbPool();
+    if (db) {
+      await db.query(
+        `INSERT INTO reviews (id, company_id, author, rating, date, relative_time, content, sentiment, topic, is_operational_issue, replied, reply_text, reply_date, source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          newReview.id,
+          newReview.company_id,
+          newReview.author,
+          newReview.rating,
+          newReview.date,
+          newReview.relative_time || null,
+          newReview.content,
+          newReview.sentiment,
+          newReview.topic || null,
+          newReview.is_operational_issue ? 1 : 0,
+          newReview.replied ? 1 : 0,
+          newReview.reply_text || null,
+          newReview.reply_date || null,
+          newReview.source,
+        ]
+      );
+      return newReview;
+    }
+  } catch (err: any) {
+    console.warn('[createReview] MySQL error:', err?.message);
+  }
+
+  inMemoryReviews.unshift(newReview);
+  return newReview;
+}
+
+export async function updateReviewReply(reviewId: string, replyText: string, companyId?: string): Promise<boolean> {
+  const replyDate = new Date().toISOString().split('T')[0];
+  try {
+    const db = await getDbPool();
+    if (db) {
+      if (companyId) {
+        await db.query(
+          'UPDATE reviews SET replied = 1, reply_text = ?, reply_date = ? WHERE id = ? AND company_id = ?',
+          [replyText, replyDate, reviewId, companyId]
+        );
+      } else {
+        await db.query(
+          'UPDATE reviews SET replied = 1, reply_text = ?, reply_date = ? WHERE id = ?',
+          [replyText, replyDate, reviewId]
+        );
+      }
+      return true;
+    }
+  } catch (err: any) {
+    console.warn('[updateReviewReply] MySQL error:', err?.message);
+  }
+
+  const existing = inMemoryReviews.find((r) => r.id === reviewId && (!companyId || r.company_id === companyId));
+  if (existing) {
+    existing.replied = true;
+    existing.reply_text = replyText;
+    existing.reply_date = replyDate;
+    return true;
+  }
+  return false;
+}
+
+export async function deleteReview(reviewId: string, companyId?: string): Promise<boolean> {
+  try {
+    const db = await getDbPool();
+    if (db) {
+      if (companyId) {
+        await db.query('DELETE FROM reviews WHERE id = ? AND company_id = ?', [reviewId, companyId]);
+      } else {
+        await db.query('DELETE FROM reviews WHERE id = ?', [reviewId]);
+      }
+      return true;
+    }
+  } catch (err: any) {
+    console.warn('[deleteReview] MySQL error:', err?.message);
+  }
+
+  const idx = inMemoryReviews.findIndex((r) => r.id === reviewId && (!companyId || r.company_id === companyId));
+  if (idx >= 0) {
+    inMemoryReviews.splice(idx, 1);
+    return true;
+  }
+  return false;
+}
+
+// ---------------- CONTENT POSTS MANAGEMENT (PER-TENANT MYSQL PERSISTENCE) ---------------- //
+
+export async function getCompanyPosts(companyId?: string): Promise<DbContentPost[]> {
+  try {
+    const db = await getDbPool();
+    if (db) {
+      const targetCompanyId = companyId || (await getDefaultCompanyId()) || 'comp_aaditech_main';
+
+      // Auto-seed into MySQL if empty for the primary default company
+      const [countRows]: any = await db.query('SELECT COUNT(*) as count FROM content_posts WHERE company_id = ?', [targetCompanyId]);
+      if ((!countRows || countRows[0]?.count === 0) && (targetCompanyId === 'comp_aaditech_main' || targetCompanyId.includes('aaditech'))) {
+        for (const seedPost of defaultSeedPosts) {
+          await db.query(
+            `INSERT IGNORE INTO content_posts (id, company_id, title, type, platforms, channel, headline, caption, cta, image_url, status, scheduled_date, scheduled_time, time_slot, hashtags, reel_script)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              seedPost.id,
+              targetCompanyId,
+              seedPost.title || null,
+              seedPost.type || 'offer',
+              JSON.stringify(seedPost.platforms || ['google']),
+              seedPost.channel || 'google',
+              seedPost.headline || null,
+              seedPost.caption,
+              seedPost.cta || null,
+              seedPost.image_url || null,
+              seedPost.status || 'scheduled',
+              seedPost.scheduled_date || null,
+              seedPost.scheduled_time || null,
+              seedPost.time_slot || null,
+              JSON.stringify(seedPost.hashtags || []),
+              seedPost.reel_script ? JSON.stringify(seedPost.reel_script) : null,
+            ]
+          );
+        }
+      }
+
+      const [rows]: any = await db.query('SELECT * FROM content_posts WHERE company_id = ? ORDER BY created_at DESC', [targetCompanyId]);
+      return rows.map((r: any) => {
+        let platforms: string[] = ['google'];
+        if (r.platforms) {
+          try {
+            platforms = typeof r.platforms === 'string' ? JSON.parse(r.platforms) : r.platforms;
+          } catch {
+            platforms = String(r.platforms).split(',').map((s: string) => s.trim());
+          }
+        }
+
+        let hashtags: string[] = [];
+        if (r.hashtags) {
+          try {
+            hashtags = typeof r.hashtags === 'string' ? JSON.parse(r.hashtags) : r.hashtags;
+          } catch {
+            hashtags = String(r.hashtags).split(',').map((s: string) => s.trim());
+          }
+        }
+
+        let reel_script = undefined;
+        if (r.reel_script) {
+          try {
+            reel_script = typeof r.reel_script === 'string' ? JSON.parse(r.reel_script) : r.reel_script;
+          } catch {
+            reel_script = undefined;
+          }
+        }
+
+        return {
+          ...r,
+          platforms,
+          hashtags,
+          reel_script,
+        };
+      });
+    }
+  } catch (err: any) {
+    console.warn('[getCompanyPosts] MySQL error, using fallback:', err?.message);
+  }
+
+  const targetId = companyId || 'comp_aaditech_main';
+  return inMemoryContentPosts.filter((p) => p.company_id === targetId);
+}
+
+export async function getPostById(id: string): Promise<DbContentPost | null> {
+  try {
+    const db = await getDbPool();
+    if (db) {
+      const [rows]: any = await db.query('SELECT * FROM content_posts WHERE id = ? LIMIT 1', [id]);
+      if (rows && rows.length > 0) {
+        const r = rows[0];
+        let platforms = ['google'];
+        if (r.platforms) {
+          try {
+            platforms = typeof r.platforms === 'string' ? JSON.parse(r.platforms) : r.platforms;
+          } catch {
+            platforms = String(r.platforms).split(',').map((s: string) => s.trim());
+          }
+        }
+        let hashtags: string[] = [];
+        if (r.hashtags) {
+          try {
+            hashtags = typeof r.hashtags === 'string' ? JSON.parse(r.hashtags) : r.hashtags;
+          } catch {
+            hashtags = String(r.hashtags).split(',').map((s: string) => s.trim());
+          }
+        }
+        return { ...r, platforms, hashtags };
+      }
+      return null;
+    }
+  } catch (err: any) {
+    console.warn('[getPostById] MySQL error:', err?.message);
+  }
+
+  return inMemoryContentPosts.find((p) => p.id === id) || null;
+}
+
+export async function createContentPost(post: Omit<DbContentPost, 'id'> & { id?: string }): Promise<DbContentPost> {
+  const newPost: DbContentPost = {
+    id: post.id || `post_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`,
+    company_id: post.company_id || (await getDefaultCompanyId()) || 'comp_aaditech_main',
+    title: post.title || 'Untitled Post',
+    type: post.type || 'offer',
+    platforms: post.platforms && post.platforms.length > 0 ? post.platforms : ['google'],
+    channel: post.channel || post.platforms?.[0] || 'google',
+    headline: post.headline || '',
+    caption: post.caption,
+    cta: post.cta || '',
+    image_url: post.image_url || 'https://images.unsplash.com/photo-1460925895917-afdab827c52f?auto=format&fit=crop&w=600&q=80',
+    status: post.status || 'scheduled',
+    scheduled_date: post.scheduled_date || new Date().toISOString().split('T')[0],
+    scheduled_time: post.scheduled_time || `${new Date().toISOString().split('T')[0]} 10:00:00`,
+    time_slot: post.time_slot || '10:00 AM',
+    hashtags: post.hashtags || [],
+    reel_script: post.reel_script || undefined,
+    created_at: new Date().toISOString(),
+  };
+
+  try {
+    const db = await getDbPool();
+    if (db) {
+      await db.query(
+        `INSERT INTO content_posts (id, company_id, title, type, platforms, channel, headline, caption, cta, image_url, status, scheduled_date, scheduled_time, time_slot, hashtags, reel_script)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          newPost.id,
+          newPost.company_id,
+          newPost.title || null,
+          newPost.type || 'offer',
+          JSON.stringify(newPost.platforms || []),
+          newPost.channel,
+          newPost.headline || null,
+          newPost.caption,
+          newPost.cta || null,
+          newPost.image_url || null,
+          newPost.status,
+          newPost.scheduled_date || null,
+          newPost.scheduled_time || null,
+          newPost.time_slot || null,
+          JSON.stringify(newPost.hashtags || []),
+          newPost.reel_script ? JSON.stringify(newPost.reel_script) : null,
+        ]
+      );
+      return newPost;
+    }
+  } catch (err: any) {
+    console.warn('[createContentPost] MySQL error:', err?.message);
+  }
+
+  inMemoryContentPosts.unshift(newPost);
+  return newPost;
+}
+
+export async function updateContentPostStatus(postId: string, status: DbContentPost['status'], companyId?: string): Promise<boolean> {
+  try {
+    const db = await getDbPool();
+    if (db) {
+      if (companyId) {
+        await db.query('UPDATE content_posts SET status = ? WHERE id = ? AND company_id = ?', [status, postId, companyId]);
+      } else {
+        await db.query('UPDATE content_posts SET status = ? WHERE id = ?', [status, postId]);
+      }
+      return true;
+    }
+  } catch (err: any) {
+    console.warn('[updateContentPostStatus] MySQL error:', err?.message);
+  }
+
+  const existing = inMemoryContentPosts.find((p) => p.id === postId && (!companyId || p.company_id === companyId));
+  if (existing) {
+    existing.status = status;
+    return true;
+  }
+  return false;
+}
+
+export async function deleteContentPost(postId: string, companyId?: string): Promise<boolean> {
+  try {
+    const db = await getDbPool();
+    if (db) {
+      if (companyId) {
+        await db.query('DELETE FROM content_posts WHERE id = ? AND company_id = ?', [postId, companyId]);
+      } else {
+        await db.query('DELETE FROM content_posts WHERE id = ?', [postId]);
+      }
+      return true;
+    }
+  } catch (err: any) {
+    console.warn('[deleteContentPost] MySQL error:', err?.message);
+  }
+
+  const idx = inMemoryContentPosts.findIndex((p) => p.id === postId && (!companyId || p.company_id === companyId));
+  if (idx >= 0) {
+    inMemoryContentPosts.splice(idx, 1);
+    return true;
+  }
+  return false;
+}
+
 

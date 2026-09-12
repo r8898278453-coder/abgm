@@ -37,6 +37,14 @@ import {
   getStoredActiveCompanyId,
   setStoredActiveCompanyId,
   checkAuthSession,
+  fetchCompanyReviews,
+  createReviewApi,
+  replyToReviewApi,
+  deleteReviewApi,
+  fetchCompanyPosts,
+  createContentPostApi,
+  updatePostStatusApi,
+  deleteContentPostApi,
 } from './services/authService';
 
 import {
@@ -147,12 +155,40 @@ export default function App() {
     if (payload) {
       if (payload.growth_score) setGrowthScore(payload.growth_score);
       if (payload.audit_items) setAuditItems(payload.audit_items);
-      if (payload.reviews) setReviews(payload.reviews);
       if (payload.keywords) setKeywords(payload.keywords);
       if (payload.competitors) setCompetitors(payload.competitors);
-      if (payload.posts) setContentPosts(payload.posts);
       if (payload.campaigns) setCampaigns(payload.campaigns);
       if (payload.autonomous_actions) setActions(payload.autonomous_actions);
+    }
+
+    // Load isolated reviews from real MySQL endpoint
+    try {
+      const companyReviews = await fetchCompanyReviews(comp.id);
+      if (companyReviews && companyReviews.length > 0) {
+        setReviews(companyReviews);
+      } else if (payload && payload.reviews) {
+        setReviews(payload.reviews);
+      } else {
+        setReviews([]);
+      }
+    } catch (err) {
+      console.error('Failed to load company reviews from MySQL:', err);
+      if (payload && payload.reviews) setReviews(payload.reviews);
+    }
+
+    // Load isolated content posts from real MySQL endpoint
+    try {
+      const companyPosts = await fetchCompanyPosts(comp.id);
+      if (companyPosts && companyPosts.length > 0) {
+        setContentPosts(companyPosts);
+      } else if (payload && payload.posts) {
+        setContentPosts(payload.posts);
+      } else {
+        setContentPosts([]);
+      }
+    } catch (err) {
+      console.error('Failed to load company posts from MySQL:', err);
+      if (payload && payload.posts) setContentPosts(payload.posts);
     }
 
     // Load isolated leads for this specific company
@@ -277,27 +313,30 @@ export default function App() {
   };
 
   const handleQuickApproveReviews = () => {
+    const defaultReply = 'Thank you for choosing Apex Tech Care! We appreciate your trust in our repair lab.';
+    const unreplied = reviews.filter((r) => !r.replied);
     setReviews((prev) =>
       prev.map((r) =>
         !r.replied
           ? {
               ...r,
               replied: true,
-              replyText: 'Thank you for choosing Apex Tech Care! We appreciate your trust in our repair lab.',
+              replyText: defaultReply,
               replyDate: 'Just now',
             }
           : r
       )
     );
+    unreplied.forEach(async (r) => {
+      try {
+        await replyToReviewApi(r.id, defaultReply, activeCompanyId || undefined);
+      } catch (err) {
+        console.error('Failed to quick-approve review in MySQL:', err);
+      }
+    });
   };
 
-  const handlePublishPost = (postId: string) => {
-    setContentPosts((prev) =>
-      prev.map((p) => (p.id === postId ? { ...p, status: 'published' as const } : p))
-    );
-  };
-
-  const handleAddReviewReply = (reviewId: string, replyText: string) => {
+  const handleAddReviewReply = async (reviewId: string, replyText: string) => {
     setReviews((prev) =>
       prev.map((r) =>
         r.id === reviewId
@@ -310,10 +349,87 @@ export default function App() {
           : r
       )
     );
+    try {
+      await replyToReviewApi(reviewId, replyText, activeCompanyId || undefined);
+    } catch (err) {
+      console.error('Failed to save review reply to MySQL:', err);
+    }
   };
 
-  const handleAddNewPost = (post: ContentPost) => {
+  const handleAddNewReview = async (review: Partial<ReviewItem>) => {
+    const tempId = `rev_${Date.now()}`;
+    const rating = review.rating || 5;
+    const sentiment: 'positive' | 'neutral' | 'negative' =
+      review.sentiment || (rating >= 4 ? 'positive' : rating === 3 ? 'neutral' : 'negative');
+    const fullReview: ReviewItem = {
+      id: tempId,
+      author: review.author || 'Anonymous Customer',
+      rating,
+      sentiment,
+      content: review.content || '',
+      relativeTime: review.relativeTime || 'Just now',
+      date: review.date || new Date().toISOString().split('T')[0],
+      replied: false,
+      isOperationalIssue: !!review.isOperationalIssue,
+      topic: review.topic || 'Customer Feedback',
+      source: review.source || 'google',
+    };
+    setReviews((prev) => [fullReview, ...prev]);
+    try {
+      const created = await createReviewApi({
+        ...fullReview,
+        companyId: activeCompanyId || undefined,
+      });
+      if (created && created.id) {
+        setReviews((prev) => prev.map((r) => (r.id === tempId ? created : r)));
+      }
+    } catch (err) {
+      console.error('Failed to create review in MySQL:', err);
+    }
+  };
+
+  const handleDeleteReview = async (reviewId: string) => {
+    setReviews((prev) => prev.filter((r) => r.id !== reviewId));
+    try {
+      await deleteReviewApi(reviewId, activeCompanyId || undefined);
+    } catch (err) {
+      console.error('Failed to delete review in MySQL:', err);
+    }
+  };
+
+  const handleAddNewPost = async (post: ContentPost) => {
     setContentPosts((prev) => [post, ...prev]);
+    try {
+      const created = await createContentPostApi({
+        ...post,
+        companyId: activeCompanyId || undefined,
+      });
+      if (created && created.id) {
+        setContentPosts((prev) => prev.map((p) => (p.id === post.id ? created : p)));
+      }
+    } catch (err) {
+      console.error('Failed to save post to MySQL:', err);
+    }
+  };
+
+  const handlePublishPost = async (postId: string) => {
+    setContentPosts((prev) =>
+      prev.map((p) => (p.id === postId ? { ...p, status: 'published' as const } : p))
+    );
+    try {
+      await updatePostStatusApi(postId, 'published', activeCompanyId || undefined);
+    } catch (err) {
+      console.error('Failed to update post status in MySQL:', err);
+    }
+  };
+
+  const handleDeletePost = async (postId: string) => {
+    setContentPosts((prev) => prev.filter((p) => p.id !== postId));
+    try {
+      await deleteContentPostApi(postId, activeCompanyId || undefined);
+    } catch (err) {
+      console.error('Failed to delete post from MySQL:', err);
+    }
   };
 
   const handleUpdateLeadStage = (leadId: string, stage: LeadItem['stage']) => {
@@ -470,7 +586,14 @@ export default function App() {
                 <ReviewsView
                   reviews={reviews}
                   business={business}
+                  companyId={activeCompanyId || undefined}
                   onAddReply={handleAddReviewReply}
+                  onAddNewReview={handleAddNewReview}
+                  onDeleteReview={handleDeleteReview}
+                  onRefreshReviews={() => {
+                    const comp = companies.find((c) => c.id === activeCompanyId);
+                    if (comp) loadCompanyData(comp);
+                  }}
                 />
               )}
 
@@ -478,7 +601,10 @@ export default function App() {
                 <ContentStudioView
                   business={business}
                   posts={contentPosts}
+                  companyId={activeCompanyId || undefined}
                   onAddNewPost={handleAddNewPost}
+                  onPublishPost={handlePublishPost}
+                  onDeletePost={handleDeletePost}
                   onNavigate={setActiveTab}
                 />
               )}
@@ -499,6 +625,8 @@ export default function App() {
               {renderedTab === 'leads' && (
                 <LeadsCrmView
                   leads={leads}
+                  companyId={activeCompanyId || undefined}
+                  onLeadAdded={(newLead) => setLeads((prev) => [newLead, ...prev.filter((l) => l.id !== newLead.id)])}
                   onUpdateLeadStage={handleUpdateLeadStage}
                 />
               )}
@@ -544,6 +672,7 @@ export default function App() {
               {renderedTab === 'integrations' && (
                 <IntegrationsView
                   business={business}
+                  companyId={activeCompanyId || 'comp_aaditech_main'}
                   onUpdateBusiness={setBusiness}
                 />
               )}

@@ -26,7 +26,16 @@ A complete step-by-step guide to deploying **Aaditech BGA** on **Hostinger Busin
 4. In the database list, click **Enter phpMyAdmin**.
 5. Click on your database name on the left ➔ Click **Import** tab on the top menu.
 6. Click **Choose File** ➔ Select the `schema.sql` file from this project ➔ Click **Go / Import**.
-   * *This will create all production tables (`leads`, `reviews`, `content_posts`, `autonomous_actions`, `business_profile`) with initial seed data.*
+   * *This provisions all 8 production multi-tenant tables with strict company isolation:*
+     - `users` (PBKDF2 salted password authentication & RBAC roles)
+     - `companies` (multi-tenant accounts, Google Place IDs, autopilot configurations)
+     - `company_profiles_data` (isolated metrics, audits, competitors JSON payloads)
+     - `leads` (tenant-isolated CRM leads with indexed `company_id`)
+     - `reviews` (reputation reviews with indexed `company_id`)
+     - `content_posts` (social post queue with indexed `company_id`)
+     - `autonomous_actions` (AI action logs with indexed `company_id`)
+     - `business_profile` (public business NAP details)
+   * *Note: The Node.js server (`server/db.ts`) also includes built-in proactive self-healing migrations. If you previously imported an older schema, the system will automatically run `ALTER TABLE` to append any missing `company_id` columns and indexes without downtime or data loss.*
 
 ---
 

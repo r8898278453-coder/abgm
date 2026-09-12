@@ -1,4 +1,4 @@
-import { AuthUser, CompanyRecord, LeadItem } from '../types';
+import { AuthUser, CompanyRecord, LeadItem, ReviewItem, ContentPost } from '../types';
 
 const TOKEN_KEY = 'abga_auth_token';
 const USER_KEY = 'abga_user_profile';
@@ -196,4 +196,350 @@ export async function fetchCompanyLeads(companyId?: string): Promise<LeadItem[]>
     return [];
   }
 }
+
+// ---------------- REVIEWS API CLIENT (MYSQL-BACKED) ---------------- //
+
+export async function fetchCompanyReviews(companyId?: string): Promise<ReviewItem[]> {
+  try {
+    const url = companyId ? `/api/reviews?companyId=${encodeURIComponent(companyId)}` : '/api/reviews';
+    const res = await apiRequest<{ success: boolean; reviews: any[] }>(url);
+    if (res.success && Array.isArray(res.reviews)) {
+      return res.reviews.map((r) => ({
+        id: r.id,
+        author: r.author,
+        rating: Number(r.rating) || 5,
+        date: r.date || 'Recent',
+        relativeTime: r.relative_time || 'Recently',
+        content: r.content,
+        sentiment: r.sentiment || (r.rating >= 4 ? 'positive' : r.rating === 3 ? 'neutral' : 'negative'),
+        topic: r.topic || 'General',
+        isOperationalIssue: Boolean(r.is_operational_issue),
+        replied: Boolean(r.replied),
+        replyText: r.reply_text || undefined,
+        replyDate: r.reply_date || undefined,
+        source: r.source || 'google',
+      }));
+    }
+    return [];
+  } catch (err) {
+    console.warn('Failed to fetch company reviews from MySQL:', err);
+    return [];
+  }
+}
+
+export async function createReviewApi(review: Partial<ReviewItem> & { companyId?: string }): Promise<ReviewItem | null> {
+  try {
+    const res = await apiRequest<{ success: boolean; review: any }>('/api/reviews', {
+      method: 'POST',
+      body: JSON.stringify({
+        companyId: review.companyId,
+        author: review.author,
+        rating: review.rating,
+        content: review.content,
+        date: review.date,
+        relative_time: review.relativeTime,
+        sentiment: review.sentiment,
+        topic: review.topic,
+        is_operational_issue: review.isOperationalIssue,
+        source: review.source || 'google',
+      }),
+    });
+    if (res.success && res.review) {
+      const r = res.review;
+      return {
+        id: r.id,
+        author: r.author,
+        rating: Number(r.rating) || 5,
+        date: r.date,
+        relativeTime: r.relative_time || 'Just now',
+        content: r.content,
+        sentiment: r.sentiment,
+        topic: r.topic,
+        isOperationalIssue: Boolean(r.is_operational_issue),
+        replied: Boolean(r.replied),
+        replyText: r.reply_text,
+        replyDate: r.reply_date,
+        source: r.source,
+      };
+    }
+    return null;
+  } catch (err) {
+    console.warn('Failed to create review in MySQL:', err);
+    return null;
+  }
+}
+
+export async function replyToReviewApi(reviewId: string, replyText: string, companyId?: string): Promise<boolean> {
+  try {
+    const res = await apiRequest<{ success: boolean }>(`/api/reviews/${encodeURIComponent(reviewId)}/reply`, {
+      method: 'POST',
+      body: JSON.stringify({ replyText, companyId }),
+    });
+    return Boolean(res.success);
+  } catch (err) {
+    console.warn('Failed to save review reply to MySQL:', err);
+    return false;
+  }
+}
+
+export async function deleteReviewApi(reviewId: string, companyId?: string): Promise<boolean> {
+  try {
+    const url = companyId
+      ? `/api/reviews/${encodeURIComponent(reviewId)}?companyId=${encodeURIComponent(companyId)}`
+      : `/api/reviews/${encodeURIComponent(reviewId)}`;
+    const res = await apiRequest<{ success: boolean }>(url, { method: 'DELETE' });
+    return Boolean(res.success);
+  } catch (err) {
+    console.warn('Failed to delete review from MySQL:', err);
+    return false;
+  }
+}
+
+// ---------------- CONTENT POSTS API CLIENT (MYSQL-BACKED) ---------------- //
+
+export async function fetchCompanyPosts(companyId?: string): Promise<ContentPost[]> {
+  try {
+    const url = companyId ? `/api/content-posts?companyId=${encodeURIComponent(companyId)}` : '/api/content-posts';
+    const res = await apiRequest<{ success: boolean; posts: any[] }>(url);
+    if (res.success && Array.isArray(res.posts)) {
+      return res.posts.map((p) => ({
+        id: p.id,
+        title: p.title || 'Campaign Post',
+        type: p.type || 'offer',
+        platforms: Array.isArray(p.platforms) ? p.platforms : [p.channel || 'google'],
+        headline: p.headline || '',
+        caption: p.caption,
+        cta: p.cta || '',
+        hashtags: Array.isArray(p.hashtags) ? p.hashtags : [],
+        imageUrl: p.image_url || 'https://images.unsplash.com/photo-1460925895917-afdab827c52f?auto=format&fit=crop&w=600&q=80',
+        status: p.status || 'scheduled',
+        scheduledDate: p.scheduled_date || (p.scheduled_time ? p.scheduled_time.split(' ')[0] : 'Scheduled'),
+        timeSlot: p.time_slot || '10:00 AM',
+        reelScript: p.reel_script || undefined,
+      }));
+    }
+    return [];
+  } catch (err) {
+    console.warn('Failed to fetch company content posts from MySQL:', err);
+    return [];
+  }
+}
+
+export async function createContentPostApi(post: Partial<ContentPost> & { companyId?: string }): Promise<ContentPost | null> {
+  try {
+    const res = await apiRequest<{ success: boolean; post: any }>('/api/content-posts', {
+      method: 'POST',
+      body: JSON.stringify({
+        companyId: post.companyId,
+        title: post.title,
+        type: post.type,
+        platforms: post.platforms,
+        headline: post.headline,
+        caption: post.caption,
+        cta: post.cta,
+        image_url: post.imageUrl,
+        status: post.status,
+        scheduled_date: post.scheduledDate,
+        time_slot: post.timeSlot,
+        hashtags: post.hashtags,
+        reel_script: post.reelScript,
+      }),
+    });
+    if (res.success && res.post) {
+      const p = res.post;
+      return {
+        id: p.id,
+        title: p.title || 'Campaign Post',
+        type: p.type || 'offer',
+        platforms: Array.isArray(p.platforms) ? p.platforms : [p.channel || 'google'],
+        headline: p.headline || '',
+        caption: p.caption,
+        cta: p.cta || '',
+        hashtags: Array.isArray(p.hashtags) ? p.hashtags : [],
+        imageUrl: p.image_url,
+        status: p.status,
+        scheduledDate: p.scheduled_date,
+        timeSlot: p.time_slot,
+        reelScript: p.reel_script,
+      };
+    }
+    return null;
+  } catch (err) {
+    console.warn('Failed to create content post in MySQL:', err);
+    return null;
+  }
+}
+
+export async function updatePostStatusApi(postId: string, status: string, companyId?: string): Promise<boolean> {
+  try {
+    const res = await apiRequest<{ success: boolean }>(`/api/content-posts/${encodeURIComponent(postId)}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, companyId }),
+    });
+    return Boolean(res.success);
+  } catch (err) {
+    console.warn('Failed to update post status in MySQL:', err);
+    return false;
+  }
+}
+
+export async function deleteContentPostApi(postId: string, companyId?: string): Promise<boolean> {
+  try {
+    const url = companyId
+      ? `/api/content-posts/${encodeURIComponent(postId)}?companyId=${encodeURIComponent(companyId)}`
+      : `/api/content-posts/${encodeURIComponent(postId)}`;
+    const res = await apiRequest<{ success: boolean }>(url, { method: 'DELETE' });
+    return Boolean(res.success);
+  } catch (err) {
+    console.warn('Failed to delete content post from MySQL:', err);
+    return false;
+  }
+}
+
+// ---------------- WHATSAPP CLOUD & RAZORPAY INTEGRATION SERVICES ---------------- //
+
+export interface WhatsAppSendResult {
+  success: boolean;
+  method?: 'meta_cloud_api' | 'wa_link';
+  messageId?: string;
+  recipient?: string;
+  message?: string;
+  waLink?: string;
+  error?: string;
+  fallbackNotice?: string;
+}
+
+export async function sendWhatsAppMessageApi(payload: {
+  to: string;
+  message?: string;
+  templateName?: string;
+  languageCode?: string;
+  companyId?: string;
+}): Promise<WhatsAppSendResult> {
+  try {
+    const res = await apiRequest<WhatsAppSendResult>('/api/whatsapp/send', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return res;
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || 'Failed to dispatch WhatsApp message',
+    };
+  }
+}
+
+export async function getWhatsAppStatusApi(companyId?: string): Promise<{
+  configured: boolean;
+  phoneNumberId?: string | null;
+  wabaId?: string | null;
+}> {
+  try {
+    const url = companyId ? `/api/whatsapp/status?companyId=${encodeURIComponent(companyId)}` : '/api/whatsapp/status';
+    const res = await apiRequest<{ success: boolean; configured: boolean; phoneNumberId?: string; wabaId?: string }>(url);
+    return {
+      configured: Boolean(res.configured),
+      phoneNumberId: res.phoneNumberId || null,
+      wabaId: res.wabaId || null,
+    };
+  } catch {
+    return { configured: false };
+  }
+}
+
+export interface RazorpayOrderResult {
+  success: boolean;
+  order?: any;
+  keyId?: string;
+  mode?: string;
+  error?: string;
+}
+
+export async function createRazorpayOrderApi(payload: {
+  amount: number;
+  currency?: string;
+  receipt?: string;
+  notes?: Record<string, any>;
+  companyId?: string;
+}): Promise<RazorpayOrderResult> {
+  try {
+    const res = await apiRequest<RazorpayOrderResult>('/api/razorpay/create-order', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return res;
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Failed to create Razorpay order' };
+  }
+}
+
+export async function verifyRazorpayPaymentApi(payload: {
+  razorpay_order_id: string;
+  razorpay_payment_id: string;
+  razorpay_signature?: string;
+  companyId?: string;
+  leadId?: string;
+  planName?: string;
+  amount?: number;
+}): Promise<{ success: boolean; verified: boolean; paymentId?: string; message?: string; error?: string }> {
+  try {
+    const res = await apiRequest<any>('/api/razorpay/verify-payment', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return res;
+  } catch (err: any) {
+    return { success: false, verified: false, error: err?.message || 'Verification failed' };
+  }
+}
+
+export async function createPaymentLinkApi(payload: {
+  amount: number;
+  description: string;
+  customerName?: string;
+  customerPhone?: string;
+  customerEmail?: string;
+  companyId?: string;
+  leadId?: string;
+}): Promise<{
+  success: boolean;
+  shortUrl?: string;
+  upiUri?: string;
+  method?: string;
+  amount?: number;
+  error?: string;
+}> {
+  try {
+    const res = await apiRequest<any>('/api/razorpay/create-payment-link', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return res;
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Failed to create payment link' };
+  }
+}
+
+export async function getRazorpayStatusApi(companyId?: string): Promise<{
+  configured: boolean;
+  isLive: boolean;
+  keyId?: string | null;
+  mode: string;
+}> {
+  try {
+    const url = companyId ? `/api/razorpay/status?companyId=${encodeURIComponent(companyId)}` : '/api/razorpay/status';
+    const res = await apiRequest<{ success: boolean; configured: boolean; isLive: boolean; keyId?: string; mode: string }>(url);
+    return {
+      configured: Boolean(res.configured),
+      isLive: Boolean(res.isLive),
+      keyId: res.keyId || null,
+      mode: res.mode || 'UNCONFIGURED',
+    };
+  } catch {
+    return { configured: false, isLive: false, mode: 'UNCONFIGURED' };
+  }
+}
+
+
 

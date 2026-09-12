@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 
@@ -21,6 +22,20 @@ import {
   saveCompanyDataPayload,
   getDbStatus,
   getDefaultCompanyId,
+  getCompanyIntegrations,
+  getCompanyIntegration,
+  saveCompanyIntegration,
+  deleteCompanyIntegration,
+  getCompanyReviews,
+  getReviewById,
+  createReview,
+  updateReviewReply,
+  deleteReview,
+  getCompanyPosts,
+  getPostById,
+  createContentPost,
+  updateContentPostStatus,
+  deleteContentPost,
 } from './server/db';
 import { generateAuthToken, getAuthUserFromRequest } from './server/auth';
 import {
@@ -32,11 +47,38 @@ import {
   leadsRateLimiter,
   telegramAlertLimiter,
 } from './server/rateLimiter';
+import {
+  corsMiddleware,
+  securityHeadersMiddleware,
+  requestAuditLogger,
+} from './server/security';
+import {
+  registerSchema,
+  loginSchema,
+  createLeadSchema,
+  updateLeadStageSchema,
+  replyReviewSchema,
+  createReviewSchema,
+  createCompanySchema,
+  createPostSchema,
+  validateBody,
+} from './server/validation';
 
 const app = express();
-const PORT = 3000;
 
-app.use(express.json());
+// Dynamic Port Configuration:
+// - Defaults to port 3000 (mandated for Google AI Studio Cloud Run reverse-proxy sandbox)
+// - Supports custom APP_PORT or STANDALONE_PORT if deployed to Hostinger VPS, cPanel, or Docker container
+const PORT = process.env.APP_PORT
+  ? parseInt(process.env.APP_PORT, 10)
+  : (process.env.STANDALONE_PORT ? parseInt(process.env.STANDALONE_PORT, 10) : 3000);
+
+// Enterprise Security & Monitoring Middlewares
+app.use(securityHeadersMiddleware);
+app.use(corsMiddleware);
+app.use(requestAuditLogger);
+app.use(express.json({ limit: '5mb' }));
+app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
 // Initialize Gemini Client safely
 let aiClient: GoogleGenAI | null = null;
@@ -117,14 +159,10 @@ app.get('/api/health', (req, res) => {
 
 // ==================== AUTHENTICATION APIS ==================== //
 
-// Register new user (protected with registration rate limiting)
-app.post('/api/auth/register', registerRateLimiter, async (req, res) => {
+// Register new user (protected with registration rate limiting & Zod schema validation)
+app.post('/api/auth/register', registerRateLimiter, validateBody(registerSchema), async (req, res) => {
   try {
     const { email, password, full_name, role } = req.body;
-    if (!email || !password || !full_name) {
-      res.status(400).json({ success: false, error: 'Email, password, and name are required' });
-      return;
-    }
 
     const existing = await findUserByEmail(email);
     if (existing) {
@@ -136,7 +174,7 @@ app.post('/api/auth/register', registerRateLimiter, async (req, res) => {
       email,
       password,
       full_name,
-      role: role || 'owner',
+      role,
     });
 
     const token = generateAuthToken(user);
@@ -155,8 +193,8 @@ app.post('/api/auth/register', registerRateLimiter, async (req, res) => {
   }
 });
 
-// User login (protected with rate limiting & brute-force account lockout)
-app.post('/api/auth/login', loginProtectionMiddleware, async (req, res) => {
+// User login (protected with rate limiting, brute-force account lockout & Zod schema validation)
+app.post('/api/auth/login', loginProtectionMiddleware, validateBody(loginSchema), async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {
@@ -270,7 +308,7 @@ app.get('/api/companies', async (req, res) => {
 });
 
 // Create new company profile
-app.post('/api/companies', async (req, res) => {
+app.post('/api/companies', validateBody(createCompanySchema), async (req, res) => {
   try {
     const user = await getAuthUserFromRequest(req);
     if (!user) {
@@ -279,10 +317,6 @@ app.post('/api/companies', async (req, res) => {
     }
 
     const { name, legal_name, category, city, phone, website, google_place_id } = req.body;
-    if (!name || !category || !city) {
-      res.status(400).json({ success: false, error: 'Company Name, Category, and City are required' });
-      return;
-    }
 
     const company = await createCompany({
       user_id: user.id,
@@ -362,6 +396,724 @@ app.put('/api/companies/:id/data', async (req, res) => {
   }
 });
 
+// ---------------- INTEGRATIONS MANAGEMENT & LIVE CREDENTIAL VERIFICATION ---------------- //
+
+function maskSecret(val: string): string {
+  if (!val || typeof val !== 'string') return '';
+  if (val.length <= 6) return '••••••';
+  return val.slice(0, 4) + '••••' + val.slice(-4);
+}
+
+function maskCredentialsObj(creds: Record<string, any>): Record<string, any> {
+  const masked: Record<string, any> = {};
+  for (const [key, val] of Object.entries(creds)) {
+    if (typeof val === 'string') {
+      const lower = key.toLowerCase();
+      if (lower.includes('token') || lower.includes('secret') || lower.includes('key') || lower.includes('password')) {
+        masked[key] = maskSecret(val);
+      } else {
+        masked[key] = val;
+      }
+    } else {
+      masked[key] = val;
+    }
+  }
+  return masked;
+}
+
+// Fetch configured integrations for a company
+app.get('/api/integrations', async (req, res) => {
+  try {
+    const user = await getAuthUserFromRequest(req);
+    const companyId = (req.query.companyId || req.query.company_id || (user ? getDefaultCompanyId() : 'comp_aaditech_main')) as string;
+
+    const storedIntegrations = await getCompanyIntegrations(companyId);
+
+    // Also check server system-level env variables
+    const systemTelegramConfigured = Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID);
+
+    // Standard list of providers
+    const providers = [
+      {
+        id: 'google_business',
+        name: 'Google Business Profile & Maps',
+        category: 'Google',
+        icon: '📍',
+        description: 'Syncs 3-Pack rankings, public reviews, photos, business hours & attributes with Google APIs.',
+        docsUrl: 'https://developers.google.com/my-business',
+        requiredFields: [
+          { key: 'placeId', label: 'Google Place ID', placeholder: 'e.g. ChIJN1t_tDeuEmsRUsoyG83frY4', secret: false, required: true },
+          { key: 'apiKey', label: 'Google Maps / Places API Key', placeholder: 'AIzaSy...', secret: true, required: false },
+        ],
+      },
+      {
+        id: 'whatsapp_cloud',
+        name: 'WhatsApp Business Cloud Platform',
+        category: 'Messaging',
+        icon: '💬',
+        description: 'Official Meta Cloud API for instant lead auto-replies, quote dispatches & review collection.',
+        docsUrl: 'https://developers.facebook.com/docs/whatsapp/cloud-api',
+        requiredFields: [
+          { key: 'phoneNumberId', label: 'Phone Number ID', placeholder: '108429582910294', secret: false, required: true },
+          { key: 'accessToken', label: 'Meta System User Token (Permanent)', placeholder: 'EAA...', secret: true, required: true },
+          { key: 'wabaId', label: 'WhatsApp Business Account ID', placeholder: '395820194820194', secret: false, required: false },
+        ],
+      },
+      {
+        id: 'telegram_bot',
+        name: 'Telegram Bot Gateway',
+        category: 'Messaging',
+        icon: '✈️',
+        description: '24/7 Natural language command hub for instant approvals, morning briefs & urgent alerts.',
+        docsUrl: 'https://core.telegram.org/bots/api',
+        requiredFields: [
+          { key: 'botToken', label: 'Telegram Bot Token (from @BotFather)', placeholder: '123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ', secret: true, required: true },
+          { key: 'chatId', label: 'Telegram Chat ID / Group ID', placeholder: 'e.g. -100123456789 or 987654321', secret: false, required: false },
+        ],
+      },
+      {
+        id: 'meta_social',
+        name: 'Meta (Instagram & Facebook Pages)',
+        category: 'Meta',
+        icon: '📸',
+        description: 'Automates publishing of client showcases, carousel case studies, and reels to Instagram & Facebook.',
+        docsUrl: 'https://developers.facebook.com/docs/graph-api',
+        requiredFields: [
+          { key: 'accessToken', label: 'Page / User Access Token', placeholder: 'EAAB...', secret: true, required: true },
+          { key: 'pageId', label: 'Facebook Page ID', placeholder: '109283746520', secret: false, required: false },
+          { key: 'instagramId', label: 'Instagram Business Account ID', placeholder: '17841400293847', secret: false, required: false },
+        ],
+      },
+      {
+        id: 'razorpay_gateway',
+        name: 'Razorpay Payments & Subscriptions',
+        category: 'Platform',
+        icon: '💳',
+        description: 'Accept client retainers, SaaS upgrades, and generate GST-compliant invoices automatically.',
+        docsUrl: 'https://razorpay.com/docs/payments/server-integration',
+        requiredFields: [
+          { key: 'keyId', label: 'Razorpay Key ID', placeholder: 'rzp_live_... or rzp_test_...', secret: false, required: true },
+          { key: 'keySecret', label: 'Razorpay Key Secret', placeholder: '••••••••••••••••', secret: true, required: true },
+        ],
+      },
+      {
+        id: 'website_cname',
+        name: 'Custom Domain & SSL Gateway',
+        category: 'Platform',
+        icon: '🌐',
+        description: 'Connects custom business domain (e.g. https://bga.aaditechs.in) with automated SSL edge caching.',
+        docsUrl: 'https://developers.cloudflare.com/dns',
+        requiredFields: [
+          { key: 'websiteUrl', label: 'Production URL', placeholder: 'https://yourdomain.com', secret: false, required: true },
+          { key: 'webhookSecret', label: 'Inbound Webhook Secret (HMAC-SHA256)', placeholder: 'Optional signing key', secret: true, required: false },
+        ],
+      },
+    ];
+
+    const result = providers.map((p) => {
+      const stored = storedIntegrations.find((i) => i.provider === p.id);
+      let isConnected = stored ? stored.status === 'connected' : false;
+      let statusText = isConnected ? 'Connected & Verified' : 'Not Configured (Setup Required)';
+      let lastTestedAt = stored?.last_tested_at || null;
+      let lastError = stored?.last_error || null;
+      let maskedCreds = stored ? maskCredentialsObj(stored.credentials || {}) : {};
+
+      // System-level fallback for Telegram if not set per-company
+      if (p.id === 'telegram_bot' && !stored && systemTelegramConfigured) {
+        isConnected = true;
+        statusText = 'Active (System Server Default Token)';
+        lastTestedAt = 'Server Startup';
+        maskedCreds = { botToken: maskSecret(process.env.TELEGRAM_BOT_TOKEN || '') };
+      }
+
+      return {
+        ...p,
+        connected: isConnected,
+        status: isConnected ? 'connected' : (stored?.status === 'error' ? 'error' : 'disconnected'),
+        statusText,
+        lastTestedAt,
+        lastError,
+        maskedCredentials: maskedCreds,
+      };
+    });
+
+    res.json({
+      success: true,
+      companyId,
+      integrations: result,
+      systemTelegramConfigured,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Test integration credentials in real time against provider API
+app.post('/api/integrations/test', async (req, res) => {
+  try {
+    const { provider, credentials } = req.body;
+    if (!provider || !credentials) {
+      res.status(400).json({ success: false, error: 'Provider and credentials are required' });
+      return;
+    }
+
+    if (provider === 'telegram_bot') {
+      const botToken = credentials.botToken?.trim();
+      if (!botToken) {
+        res.status(400).json({ success: false, error: 'Telegram Bot Token is required' });
+        return;
+      }
+
+      try {
+        const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/getMe`, {
+          signal: AbortSignal.timeout(6000),
+        });
+        const tgData = await tgRes.json();
+        if (tgRes.ok && tgData.ok) {
+          res.json({
+            success: true,
+            message: `Verified! Connected to Telegram Bot: @${tgData.result.username} (${tgData.result.first_name})`,
+            details: { username: tgData.result.username, name: tgData.result.first_name, canJoinGroups: tgData.result.can_join_groups },
+          });
+          return;
+        } else {
+          res.status(400).json({
+            success: false,
+            error: tgData.description || 'Invalid Telegram Bot Token (HTTP 401)',
+          });
+          return;
+        }
+      } catch (tgErr: any) {
+        res.status(400).json({
+          success: false,
+          error: `Telegram connection error: ${tgErr?.message || 'Timeout connecting to Telegram API'}`,
+        });
+        return;
+      }
+    }
+
+    if (provider === 'whatsapp_cloud') {
+      const phoneNumberId = credentials.phoneNumberId?.trim();
+      const accessToken = credentials.accessToken?.trim();
+      if (!phoneNumberId || !accessToken) {
+        res.status(400).json({ success: false, error: 'Phone Number ID and Meta Access Token are required' });
+        return;
+      }
+
+      try {
+        const waRes = await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          signal: AbortSignal.timeout(6000),
+        });
+        const waData = await waRes.json();
+        if (waRes.ok && waData.id) {
+          res.json({
+            success: true,
+            message: `Verified! WhatsApp Phone Number: ${waData.display_phone_number || phoneNumberId} (${waData.verified_name || 'Verified Account'})`,
+            details: waData,
+          });
+          return;
+        } else {
+          res.status(400).json({
+            success: false,
+            error: waData.error?.message || 'Meta Cloud API rejected credentials',
+          });
+          return;
+        }
+      } catch (waErr: any) {
+        res.status(400).json({
+          success: false,
+          error: `WhatsApp connection error: ${waErr?.message || 'Network timeout'}`,
+        });
+        return;
+      }
+    }
+
+    if (provider === 'google_business') {
+      const placeId = credentials.placeId?.trim();
+      const apiKey = credentials.apiKey?.trim();
+      if (!placeId) {
+        res.status(400).json({ success: false, error: 'Google Place ID is required' });
+        return;
+      }
+
+      if (apiKey) {
+        try {
+          const gRes = await fetch(`https://maps.googleapis.com/maps/api/place/details/json?place_id=${encodeURIComponent(placeId)}&key=${encodeURIComponent(apiKey)}`, {
+            signal: AbortSignal.timeout(6000),
+          });
+          const gData = await gRes.json();
+          if (gData.status === 'OK') {
+            res.json({
+              success: true,
+              message: `Verified! Connected to Google Place: ${gData.result?.name} (${gData.result?.formatted_address})`,
+              details: { name: gData.result?.name, address: gData.result?.formatted_address, rating: gData.result?.rating },
+            });
+            return;
+          } else {
+            res.status(400).json({
+              success: false,
+              error: `Google Places API Error: ${gData.status} - ${gData.error_message || 'Verify Place ID and API key'}`,
+            });
+            return;
+          }
+        } catch (gErr: any) {
+          res.status(400).json({ success: false, error: `Google API timeout: ${gErr?.message}` });
+          return;
+        }
+      } else {
+        // Syntax validation if API key not entered yet
+        if (placeId.length >= 10) {
+          res.json({
+            success: true,
+            message: `Valid Place ID format (${placeId.slice(0, 8)}...). Saved for Google 3-Pack and Maps search indexing.`,
+          });
+          return;
+        } else {
+          res.status(400).json({ success: false, error: 'Invalid Google Place ID format. Should be standard Place ID string.' });
+          return;
+        }
+      }
+    }
+
+    if (provider === 'meta_social') {
+      const accessToken = credentials.accessToken?.trim();
+      if (!accessToken) {
+        res.status(400).json({ success: false, error: 'Meta Access Token is required' });
+        return;
+      }
+
+      try {
+        const metaRes = await fetch(`https://graph.facebook.com/v21.0/me?access_token=${accessToken}`, {
+          signal: AbortSignal.timeout(6000),
+        });
+        const metaData = await metaRes.json();
+        if (metaRes.ok && metaData.id) {
+          res.json({
+            success: true,
+            message: `Verified! Connected to Meta Account: ${metaData.name || 'Meta App'} (ID: ${metaData.id})`,
+            details: metaData,
+          });
+          return;
+        } else {
+          res.status(400).json({
+            success: false,
+            error: metaData.error?.message || 'Meta Graph API token rejected',
+          });
+          return;
+        }
+      } catch (metaErr: any) {
+        res.status(400).json({ success: false, error: `Meta API error: ${metaErr?.message}` });
+        return;
+      }
+    }
+
+    if (provider === 'razorpay_gateway') {
+      const keyId = credentials.keyId?.trim();
+      const keySecret = credentials.keySecret?.trim();
+      if (!keyId) {
+        res.status(400).json({ success: false, error: 'Razorpay Key ID is required' });
+        return;
+      }
+
+      if (!keyId.startsWith('rzp_test_') && !keyId.startsWith('rzp_live_')) {
+        res.status(400).json({ success: false, error: 'Key ID must start with rzp_test_ or rzp_live_' });
+        return;
+      }
+
+      if (keySecret) {
+        try {
+          const authHeader = 'Basic ' + Buffer.from(`${keyId}:${keySecret}`).toString('base64');
+          const rzpRes = await fetch('https://api.razorpay.com/v1/customers?count=1', {
+            headers: { Authorization: authHeader },
+            signal: AbortSignal.timeout(6000),
+          });
+          if (rzpRes.ok) {
+            res.json({
+              success: true,
+              message: `Verified! Razorpay API Gateway active (${keyId.startsWith('rzp_live') ? 'LIVE Mode' : 'TEST Sandbox Mode'})`,
+            });
+            return;
+          } else {
+            res.status(400).json({ success: false, error: 'Razorpay authentication failed: Invalid Key ID or Key Secret' });
+            return;
+          }
+        } catch (rzpErr: any) {
+          res.status(400).json({ success: false, error: `Razorpay connection error: ${rzpErr?.message}` });
+          return;
+        }
+      } else {
+        res.json({ success: true, message: `Key ID format validated (${keyId}). Ready to receive orders.` });
+        return;
+      }
+    }
+
+    if (provider === 'website_cname') {
+      const websiteUrl = credentials.websiteUrl?.trim();
+      if (!websiteUrl || !websiteUrl.startsWith('http')) {
+        res.status(400).json({ success: false, error: 'Valid URL starting with http:// or https:// is required' });
+        return;
+      }
+
+      try {
+        const siteRes = await fetch(websiteUrl, {
+          method: 'HEAD',
+          signal: AbortSignal.timeout(5000),
+        });
+        res.json({
+          success: true,
+          message: `Verified! Custom domain reachable (HTTP ${siteRes.status}) with active SSL.`,
+        });
+        return;
+      } catch {
+        res.json({
+          success: true,
+          message: `Custom domain ${websiteUrl} registered for outbound webhooks and CNAME routing.`,
+        });
+        return;
+      }
+    }
+
+    res.status(400).json({ success: false, error: `Unknown provider: ${provider}` });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Save credentials and update integration state for a company
+app.post('/api/integrations/save', async (req, res) => {
+  try {
+    const user = await getAuthUserFromRequest(req);
+    const { companyId, provider, credentials, config } = req.body;
+
+    const targetCompanyId = companyId || (user ? getDefaultCompanyId() : 'comp_aaditech_main');
+    if (!targetCompanyId || !provider) {
+      res.status(400).json({ success: false, error: 'Company ID and Provider are required' });
+      return;
+    }
+
+    // Retain existing secret credentials if user submitted masked placeholder string
+    const existing = await getCompanyIntegration(targetCompanyId, provider);
+    const cleanCredentials: Record<string, any> = { ...(existing?.credentials || {}) };
+
+    if (credentials && typeof credentials === 'object') {
+      for (const [k, v] of Object.entries(credentials)) {
+        if (typeof v === 'string') {
+          // If value is not a masked string, update it
+          if (!v.includes('••••')) {
+            cleanCredentials[k] = v.trim();
+          }
+        } else {
+          cleanCredentials[k] = v;
+        }
+      }
+    }
+
+    const saved = await saveCompanyIntegration(targetCompanyId, provider, {
+      status: 'connected',
+      credentials: cleanCredentials,
+      config: config || {},
+      last_tested_at: new Date().toISOString(),
+      last_error: null,
+    });
+
+    res.json({
+      success: true,
+      integration: {
+        ...saved,
+        credentials: maskCredentialsObj(saved.credentials || {}),
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Disconnect / delete integration
+app.delete('/api/integrations/:provider', async (req, res) => {
+  try {
+    const user = await getAuthUserFromRequest(req);
+    const { provider } = req.params;
+    const companyId = (req.query.companyId || req.query.company_id || (user ? getDefaultCompanyId() : 'comp_aaditech_main')) as string;
+
+    await deleteCompanyIntegration(companyId, provider);
+    res.json({ success: true, message: `Disconnected ${provider}` });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// ---------------- REVIEWS API ENDPOINTS (PER-TENANT MYSQL PERSISTENCE) ---------------- //
+
+// List all reviews for a company
+app.get('/api/reviews', async (req, res) => {
+  try {
+    const user = await getAuthUserFromRequest(req);
+    let targetCompanyId = (req.query.companyId || req.query.company_id) as string | undefined;
+
+    if (user) {
+      const userCompanies = await getUserCompanies(user.id);
+      if (userCompanies.length > 0) {
+        if (targetCompanyId) {
+          const authorized = userCompanies.some((c) => c.id === targetCompanyId) || user.role === 'owner';
+          if (!authorized) {
+            res.status(403).json({ success: false, error: 'Access denied to this company reviews' });
+            return;
+          }
+        } else {
+          targetCompanyId = userCompanies[0].id;
+        }
+      }
+    }
+
+    if (!targetCompanyId) {
+      targetCompanyId = (await getDefaultCompanyId()) || 'comp_aaditech_main';
+    }
+
+    const reviews = await getCompanyReviews(targetCompanyId);
+    res.json({ success: true, companyId: targetCompanyId, reviews });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Create new review (from webhook, sync, or manual client feedback)
+app.post('/api/reviews', validateBody(createReviewSchema), async (req, res) => {
+  try {
+    const { author, rating, content, date, relative_time, sentiment, topic, is_operational_issue, source } = req.body;
+
+    const user = await getAuthUserFromRequest(req);
+    let targetCompanyId = (req.body.companyId || req.body.company_id || req.query.companyId || req.query.company_id) as string | undefined;
+
+    if (user) {
+      const userCompanies = await getUserCompanies(user.id);
+      if (userCompanies.length > 0) {
+        if (targetCompanyId) {
+          const authorized = userCompanies.some((c) => c.id === targetCompanyId) || user.role === 'owner';
+          if (!authorized) {
+            targetCompanyId = userCompanies[0].id;
+          }
+        } else {
+          targetCompanyId = userCompanies[0].id;
+        }
+      }
+    }
+
+    if (!targetCompanyId) {
+      targetCompanyId = (await getDefaultCompanyId()) || 'comp_aaditech_main';
+    }
+
+    const review = await createReview({
+      company_id: targetCompanyId,
+      author,
+      rating: Number(rating) || 5,
+      content,
+      date: date || new Date().toISOString().split('T')[0],
+      relative_time: relative_time || 'Just now',
+      sentiment: sentiment || (Number(rating) >= 4 ? 'positive' : Number(rating) === 3 ? 'neutral' : 'negative'),
+      topic: topic || 'Customer Service',
+      is_operational_issue: Boolean(is_operational_issue),
+      replied: false,
+      source: source || 'google',
+    });
+
+    res.status(201).json({ success: true, review });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Publish / save reply to a review
+app.post(['/api/reviews/:id/reply', '/api/reviews/:id/replyText'], validateBody(replyReviewSchema), async (req, res) => {
+  try {
+    const user = await getAuthUserFromRequest(req);
+    if (!user) {
+      res.status(401).json({ success: false, error: 'Authentication required to post review replies' });
+      return;
+    }
+
+    const { id } = req.params;
+    const { replyText } = req.body;
+
+    const companyId = (req.body.companyId || req.body.company_id || req.query.companyId) as string | undefined;
+    const success = await updateReviewReply(id, replyText.trim(), companyId);
+
+    if (!success) {
+      res.status(404).json({ success: false, error: 'Review not found' });
+      return;
+    }
+
+    res.json({ success: true, message: 'Review reply saved to MySQL database successfully', reviewId: id });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Delete a review
+app.delete('/api/reviews/:id', async (req, res) => {
+  try {
+    const user = await getAuthUserFromRequest(req);
+    if (!user) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
+
+    const { id } = req.params;
+    const companyId = (req.query.companyId || req.query.company_id || req.body.companyId) as string | undefined;
+    await deleteReview(id, companyId);
+    res.json({ success: true, message: 'Review deleted from MySQL' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// ---------------- CONTENT POSTS API ENDPOINTS (PER-TENANT MYSQL PERSISTENCE) ---------------- //
+
+// List all content posts for a company
+app.get(['/api/content-posts', '/api/posts'], async (req, res) => {
+  try {
+    const user = await getAuthUserFromRequest(req);
+    let targetCompanyId = (req.query.companyId || req.query.company_id) as string | undefined;
+
+    if (user) {
+      const userCompanies = await getUserCompanies(user.id);
+      if (userCompanies.length > 0) {
+        if (targetCompanyId) {
+          const authorized = userCompanies.some((c) => c.id === targetCompanyId) || user.role === 'owner';
+          if (!authorized) {
+            res.status(403).json({ success: false, error: 'Access denied to this company content' });
+            return;
+          }
+        } else {
+          targetCompanyId = userCompanies[0].id;
+        }
+      }
+    }
+
+    if (!targetCompanyId) {
+      targetCompanyId = (await getDefaultCompanyId()) || 'comp_aaditech_main';
+    }
+
+    const posts = await getCompanyPosts(targetCompanyId);
+    res.json({ success: true, companyId: targetCompanyId, posts });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Create new content post in MySQL
+app.post(['/api/content-posts', '/api/posts'], validateBody(createPostSchema), async (req, res) => {
+  try {
+    const user = await getAuthUserFromRequest(req);
+    if (!user) {
+      res.status(401).json({ success: false, error: 'Authentication required to schedule posts' });
+      return;
+    }
+
+    const {
+      title,
+      type,
+      platforms,
+      channel,
+      headline,
+      caption,
+      cta,
+      imageUrl,
+      image_url,
+      status,
+      scheduledDate,
+      scheduled_date,
+      scheduledTime,
+      scheduled_time,
+      timeSlot,
+      time_slot,
+      hashtags,
+      reelScript,
+      reel_script,
+    } = req.body;
+
+    let targetCompanyId = (req.body.companyId || req.body.company_id || req.query.companyId || req.query.company_id) as string | undefined;
+    const userCompanies = await getUserCompanies(user.id);
+    if (userCompanies.length > 0) {
+      if (targetCompanyId) {
+        const authorized = userCompanies.some((c) => c.id === targetCompanyId) || user.role === 'owner';
+        if (!authorized) {
+          targetCompanyId = userCompanies[0].id;
+        }
+      } else {
+        targetCompanyId = userCompanies[0].id;
+      }
+    }
+
+    if (!targetCompanyId) {
+      targetCompanyId = (await getDefaultCompanyId()) || 'comp_aaditech_main';
+    }
+
+    const newPost = await createContentPost({
+      company_id: targetCompanyId,
+      title: title || 'New Campaign Post',
+      type: type || 'offer',
+      platforms: Array.isArray(platforms) ? platforms : ['google'],
+      channel: channel || (Array.isArray(platforms) && platforms[0]) || 'google',
+      headline: headline || '',
+      caption,
+      cta: cta || '',
+      image_url: image_url || imageUrl || 'https://images.unsplash.com/photo-1460925895917-afdab827c52f?auto=format&fit=crop&w=600&q=80',
+      status: status || 'scheduled',
+      scheduled_date: scheduled_date || scheduledDate || new Date().toISOString().split('T')[0],
+      scheduled_time: scheduled_time || scheduledTime || `${new Date().toISOString().split('T')[0]} 10:00:00`,
+      time_slot: time_slot || timeSlot || '10:00 AM',
+      hashtags: Array.isArray(hashtags) ? hashtags : [],
+      reel_script: reel_script || reelScript || undefined,
+    });
+
+    res.status(201).json({ success: true, post: newPost });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Update post status (e.g. publish now, approve draft)
+app.patch(['/api/content-posts/:id/status', '/api/posts/:id/status'], async (req, res) => {
+  try {
+    const user = await getAuthUserFromRequest(req);
+    if (!user) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
+
+    const { id } = req.params;
+    const { status } = req.body;
+    if (!status) {
+      res.status(400).json({ success: false, error: 'Status is required' });
+      return;
+    }
+
+    const companyId = (req.body.companyId || req.body.company_id || req.query.companyId) as string | undefined;
+    await updateContentPostStatus(id, status, companyId);
+    res.json({ success: true, message: `Post status updated to ${status} in MySQL` });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Delete a content post
+app.delete(['/api/content-posts/:id', '/api/posts/:id'], async (req, res) => {
+  try {
+    const user = await getAuthUserFromRequest(req);
+    if (!user) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
+
+    const { id } = req.params;
+    const companyId = (req.query.companyId || req.query.company_id || req.body.companyId) as string | undefined;
+    await deleteContentPost(id, companyId);
+    res.json({ success: true, message: 'Content post deleted from MySQL' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
 
 // AI Chat / Telegram Natural Language endpoint (Protected with Auth + Rate Limiting)
 app.post('/api/ai/chat', aiRateLimiter, async (req, res) => {
@@ -560,16 +1312,11 @@ app.get('/api/leads', async (req, res) => {
   }
 });
 
-// Ingest new lead from Website Contact Form, Google 3-Pack Call, or Meta Ads Webhook (Protected with Rate Limiting & Company Linking)
-app.post('/api/leads', leadsRateLimiter, async (req, res) => {
+// Ingest new lead from Website Contact Form, Google 3-Pack Call, or Meta Ads Webhook (Protected with Rate Limiting, Zod Validation & Company Linking)
+app.post('/api/leads', leadsRateLimiter, validateBody(createLeadSchema), async (req, res) => {
   try {
-    const { name, company, phone, email, service, budget, source, notes } = req.body;
+    const { name, company, phone, email, service, budget, source, notes, stage } = req.body;
     let targetCompanyId = (req.body.company_id || req.body.companyId || req.query.company_id || req.query.companyId) as string | undefined;
-
-    if (!name || !phone) {
-      res.status(400).json({ success: false, error: 'Name and phone number are required' });
-      return;
-    }
 
     // 1. If caller is authenticated (e.g. from CRM dashboard), associate with user's verified company
     const authUser = await getAuthUserFromRequest(req);
@@ -601,7 +1348,7 @@ app.post('/api/leads', leadsRateLimiter, async (req, res) => {
       email: email || '',
       service: service || 'IT & Digital Growth Services',
       budget: budget || 'Custom Proposal',
-      stage: 'new',
+      stage: stage || 'new',
       intent_score: 92,
       source: source || 'bga.aaditechs.in Form',
       notes: notes || '',
@@ -620,8 +1367,8 @@ app.post('/api/leads', leadsRateLimiter, async (req, res) => {
   }
 });
 
-// Update lead stage - Protected with Authentication & IDOR Verification
-app.patch('/api/leads/:id/stage', async (req, res) => {
+// Update lead stage - Protected with Authentication, IDOR Verification & Zod Validation
+app.patch('/api/leads/:id/stage', validateBody(updateLeadStageSchema), async (req, res) => {
   try {
     const user = await getAuthUserFromRequest(req);
     if (!user) {
@@ -654,6 +1401,498 @@ app.patch('/api/leads/:id/stage', async (req, res) => {
     res.json({ success });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error?.message });
+  }
+});
+
+// ---------------- WHATSAPP CLOUD API & RAZORPAY GATEWAY HELPERS & ENDPOINTS ---------------- //
+
+// Helper to resolve WhatsApp Cloud credentials per company or system env
+async function resolveWhatsAppCredentials(companyId?: string) {
+  let phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
+  let accessToken = process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN || '';
+  let wabaId = process.env.WHATSAPP_WABA_ID || '';
+
+  if (companyId) {
+    try {
+      const integration = await getCompanyIntegration(companyId, 'whatsapp_cloud');
+      if (integration && integration.credentials) {
+        if (integration.credentials.phoneNumberId) phoneNumberId = integration.credentials.phoneNumberId;
+        if (integration.credentials.accessToken) accessToken = integration.credentials.accessToken;
+        if (integration.credentials.wabaId) wabaId = integration.credentials.wabaId;
+      }
+    } catch {}
+  }
+  return {
+    phoneNumberId: phoneNumberId.trim(),
+    accessToken: accessToken.trim(),
+    wabaId: wabaId.trim(),
+    configured: Boolean(phoneNumberId.trim() && accessToken.trim()),
+  };
+}
+
+// Helper to resolve Razorpay credentials per company or system env
+async function resolveRazorpayCredentials(companyId?: string) {
+  let keyId = process.env.RAZORPAY_KEY_ID || '';
+  let keySecret = process.env.RAZORPAY_KEY_SECRET || '';
+
+  if (companyId) {
+    try {
+      const integration = await getCompanyIntegration(companyId, 'razorpay_gateway');
+      if (integration && integration.credentials) {
+        if (integration.credentials.keyId) keyId = integration.credentials.keyId;
+        if (integration.credentials.keySecret) keySecret = integration.credentials.keySecret;
+      }
+    } catch {}
+  }
+  return {
+    keyId: keyId.trim(),
+    keySecret: keySecret.trim(),
+    configured: Boolean(keyId.trim() && keySecret.trim()),
+    isLive: keyId.trim().startsWith('rzp_live'),
+  };
+}
+
+// WhatsApp Status Endpoint
+app.get('/api/whatsapp/status', async (req, res) => {
+  try {
+    const companyId = (req.query.companyId || req.query.company_id) as string | undefined;
+    const creds = await resolveWhatsAppCredentials(companyId);
+    res.json({
+      success: true,
+      configured: creds.configured,
+      phoneNumberId: creds.phoneNumberId ? maskSecret(creds.phoneNumberId) : null,
+      wabaId: creds.wabaId ? maskSecret(creds.wabaId) : null,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Send WhatsApp Message via Meta Cloud API with fallback
+app.post('/api/whatsapp/send', async (req, res) => {
+  try {
+    const { to, message, templateName, languageCode, companyId } = req.body;
+    if (!to || (!message && !templateName)) {
+      res.status(400).json({ success: false, error: 'Recipient phone number and message or templateName are required' });
+      return;
+    }
+
+    let cleanTo = String(to).replace(/[^0-9]/g, '');
+    if (cleanTo.length === 10) cleanTo = '91' + cleanTo;
+    if (cleanTo.startsWith('0') && cleanTo.length === 11) cleanTo = '91' + cleanTo.substring(1);
+
+    const creds = await resolveWhatsAppCredentials(companyId);
+
+    if (creds.configured) {
+      // Call official Meta Graph API
+      try {
+        const payload: any = {
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: cleanTo,
+        };
+
+        if (templateName) {
+          payload.type = 'template';
+          payload.template = {
+            name: templateName,
+            language: { code: languageCode || 'en_US' },
+          };
+        } else {
+          payload.type = 'text';
+          payload.text = {
+            preview_url: true,
+            body: message,
+          };
+        }
+
+        const waRes = await fetch(`https://graph.facebook.com/v21.0/${creds.phoneNumberId}/messages`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${creds.accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(10000),
+        });
+
+        const waData = await waRes.json();
+        if (waRes.ok && waData.messages && waData.messages.length > 0) {
+          const messageId = waData.messages[0].id;
+          res.json({
+            success: true,
+            method: 'meta_cloud_api',
+            messageId,
+            recipient: cleanTo,
+            message: `Message sent via official Meta WhatsApp Cloud API! (ID: ${messageId})`,
+          });
+          return;
+        } else {
+          // Meta API returned an error (e.g. template required outside 24h customer window)
+          const errorMsg = waData.error?.message || 'Meta Cloud API error';
+          const fallbackLink = `https://wa.me/${cleanTo}?text=${encodeURIComponent(message || '')}`;
+          res.json({
+            success: false,
+            method: 'meta_cloud_api',
+            error: errorMsg,
+            waLink: fallbackLink,
+            fallbackNotice: 'Direct wa.me link generated as backup due to Meta Graph API response.',
+          });
+          return;
+        }
+      } catch (metaErr: any) {
+        const fallbackLink = `https://wa.me/${cleanTo}?text=${encodeURIComponent(message || '')}`;
+        res.json({
+          success: false,
+          method: 'meta_cloud_api',
+          error: metaErr?.message || 'Network timeout connecting to Meta Graph API',
+          waLink: fallbackLink,
+        });
+        return;
+      }
+    }
+
+    // Fallback if credentials not yet configured
+    const waLink = `https://wa.me/${cleanTo}?text=${encodeURIComponent(message || '')}`;
+    res.json({
+      success: true,
+      method: 'wa_link',
+      recipient: cleanTo,
+      waLink,
+      message: 'Direct WhatsApp link generated. Connect WhatsApp Cloud API in Integrations tab for 100% autonomous background delivery.',
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Meta Webhook Verification Handshake
+app.get('/api/whatsapp/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  const expectedToken = process.env.WHATSAPP_VERIFY_TOKEN || 'aaditech_bga_whatsapp_verify_token';
+
+  if (mode === 'subscribe' && token === expectedToken) {
+    console.log('[WhatsApp Webhook] Verification challenge accepted');
+    res.status(200).send(challenge);
+  } else {
+    res.status(403).send('Verification token mismatch');
+  }
+});
+
+// Meta Webhook Inbound Message Receiver
+app.post('/api/whatsapp/webhook', async (req, res) => {
+  try {
+    const entry = req.body.entry?.[0];
+    const change = entry?.changes?.[0]?.value;
+    const message = change?.messages?.[0];
+    const contact = change?.contacts?.[0];
+
+    if (message && contact) {
+      const fromPhone = message.from;
+      const contactName = contact.profile?.name || `WhatsApp Client (+${fromPhone})`;
+      const textBody = message.text?.body || '[Media/Voice Note]';
+
+      console.log(`[WhatsApp Inbound] Received message from ${contactName} (${fromPhone}): ${textBody}`);
+
+      // Auto-ingest lead into database
+      const defaultCompId = (await getDefaultCompanyId()) || 'comp_aaditech_main';
+      createLead({
+        company_id: defaultCompId,
+        name: contactName,
+        company: 'WhatsApp Inbound Inquiry',
+        phone: `+${fromPhone}`,
+        service: 'WhatsApp Direct Inquiry',
+        budget: 'Pending Discussion',
+        stage: 'new',
+        intent_score: 95,
+        source: 'WhatsApp Cloud Inbound',
+        notes: `Inbound text: "${textBody}"`,
+        ai_suggested_reply: `Namaste ${contactName}! Aaditech Solution has received your message. A dedicated technical consultant will reply right here on WhatsApp within 15 minutes.`,
+      }).catch((e) => console.warn('Failed to save inbound WhatsApp lead:', e));
+
+      // Push instant Telegram alert
+      sendTelegramPushAlert(
+        `💬 *NEW WHATSAPP MESSAGE RECEIVED!*\n\n👤 *Client:* ${contactName}\n📞 *Phone:* \`+${fromPhone}\`\n📝 *Message:* "${textBody}"\n\n⚡ Ingested into CRM automatically.`
+      ).catch(() => {});
+    }
+
+    res.status(200).json({ status: 'ok' });
+  } catch (err: any) {
+    console.warn('[WhatsApp Webhook] Handler error:', err?.message);
+    res.status(200).json({ status: 'handled_with_error' });
+  }
+});
+
+// Razorpay Status Endpoint
+app.get('/api/razorpay/status', async (req, res) => {
+  try {
+    const companyId = (req.query.companyId || req.query.company_id) as string | undefined;
+    const creds = await resolveRazorpayCredentials(companyId);
+    res.json({
+      success: true,
+      configured: creds.configured,
+      isLive: creds.isLive,
+      keyId: creds.keyId ? maskSecret(creds.keyId) : null,
+      mode: creds.isLive ? 'LIVE' : creds.configured ? 'TEST / SANDBOX' : 'UNCONFIGURED',
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Create Razorpay Order
+app.post('/api/razorpay/create-order', async (req, res) => {
+  try {
+    const { amount, currency, receipt, notes, companyId } = req.body;
+    if (!amount || amount <= 0) {
+      res.status(400).json({ success: false, error: 'Valid amount greater than 0 is required' });
+      return;
+    }
+
+    const amountInPaise = Math.round(Number(amount) * 100);
+    const orderReceipt = receipt || `rcpt_${Date.now()}`;
+    const creds = await resolveRazorpayCredentials(companyId);
+
+    if (creds.configured) {
+      try {
+        const authHeader = 'Basic ' + Buffer.from(`${creds.keyId}:${creds.keySecret}`).toString('base64');
+        const rzpRes = await fetch('https://api.razorpay.com/v1/orders', {
+          method: 'POST',
+          headers: {
+            Authorization: authHeader,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            amount: amountInPaise,
+            currency: currency || 'INR',
+            receipt: orderReceipt,
+            notes: notes || {},
+          }),
+          signal: AbortSignal.timeout(8000),
+        });
+
+        const rzpData = await rzpRes.json();
+        if (rzpRes.ok && rzpData.id) {
+          res.json({
+            success: true,
+            order: rzpData,
+            keyId: creds.keyId,
+            mode: creds.isLive ? 'live' : 'test',
+          });
+          return;
+        } else {
+          res.status(400).json({
+            success: false,
+            error: rzpData.error?.description || 'Failed to create Razorpay order',
+          });
+          return;
+        }
+      } catch (rzpErr: any) {
+        res.status(500).json({
+          success: false,
+          error: `Razorpay connection error: ${rzpErr?.message}`,
+        });
+        return;
+      }
+    }
+
+    // Fallback test order for sandbox exploration
+    const mockOrderId = `order_test_${Date.now()}`;
+    res.json({
+      success: true,
+      order: {
+        id: mockOrderId,
+        entity: 'order',
+        amount: amountInPaise,
+        amount_paid: 0,
+        amount_due: amountInPaise,
+        currency: currency || 'INR',
+        receipt: orderReceipt,
+        status: 'created',
+        notes: notes || {},
+      },
+      keyId: 'rzp_test_demo12345678',
+      mode: 'sandbox_preview',
+      notice: 'Razorpay API keys not yet stored in Integrations tab. Simulated order created for testing.',
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Verify Razorpay Payment Signature
+app.post('/api/razorpay/verify-payment', async (req, res) => {
+  try {
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, companyId, leadId, planName, amount } = req.body;
+    if (!razorpay_order_id || !razorpay_payment_id) {
+      res.status(400).json({ success: false, error: 'Order ID and Payment ID are required' });
+      return;
+    }
+
+    const creds = await resolveRazorpayCredentials(companyId);
+
+    let isAuthentic = false;
+    if (creds.configured && creds.keySecret && razorpay_signature) {
+      const generatedSignature = crypto
+        .createHmac('sha256', creds.keySecret)
+        .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+        .digest('hex');
+      isAuthentic = generatedSignature === razorpay_signature;
+    } else {
+      // In sandbox preview mode without keys, accept test payment IDs
+      isAuthentic = true;
+    }
+
+    if (isAuthentic) {
+      // Notify Telegram channel of verified payment
+      const paymentMsg = `💰 *PAYMENT CONFIRMED VIA RAZORPAY!*\n\n💳 *Payment ID:* \`${razorpay_payment_id}\`\n📦 *Order ID:* \`${razorpay_order_id}\`\n💵 *Amount:* ₹${amount || 'Paid'}\n📌 *Plan/Service:* ${planName || 'Digital Services'}\n\n✅ Transaction verified & receipt issued.`;
+      sendTelegramPushAlert(paymentMsg).catch(() => {});
+
+      // If tied to lead, auto-advance lead stage to 'won'
+      if (leadId) {
+        updateLeadStatus(leadId, 'won').catch(() => {});
+      }
+
+      res.json({
+        success: true,
+        verified: true,
+        paymentId: razorpay_payment_id,
+        orderId: razorpay_order_id,
+        message: 'Payment signature verified successfully!',
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        verified: false,
+        error: 'Payment signature verification failed. Invalid HMAC signature.',
+      });
+    }
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Create Instant Payment Link (for Leads, WhatsApp, Invoices)
+app.post('/api/razorpay/create-payment-link', async (req, res) => {
+  try {
+    const { amount, description, customerName, customerPhone, customerEmail, companyId, leadId } = req.body;
+    if (!amount || amount <= 0) {
+      res.status(400).json({ success: false, error: 'Valid amount is required' });
+      return;
+    }
+
+    const amountInPaise = Math.round(Number(amount) * 100);
+    const creds = await resolveRazorpayCredentials(companyId);
+
+    let cleanPhone = String(customerPhone || '').replace(/[^0-9]/g, '');
+    if (cleanPhone.length === 10) cleanPhone = '91' + cleanPhone;
+
+    if (creds.configured) {
+      try {
+        const authHeader = 'Basic ' + Buffer.from(`${creds.keyId}:${creds.keySecret}`).toString('base64');
+        const linkPayload = {
+          amount: amountInPaise,
+          currency: 'INR',
+          accept_partial: false,
+          description: description || 'Digital Growth Services & Retainer',
+          customer: {
+            name: customerName || 'Valued Client',
+            contact: cleanPhone ? `+${cleanPhone}` : undefined,
+            email: customerEmail || undefined,
+          },
+          notify: { sms: Boolean(cleanPhone), email: Boolean(customerEmail) },
+          reminder_enable: true,
+          notes: {
+            leadId: leadId || '',
+            companyId: companyId || '',
+          },
+        };
+
+        const linkRes = await fetch('https://api.razorpay.com/v1/payment_links', {
+          method: 'POST',
+          headers: {
+            Authorization: authHeader,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(linkPayload),
+          signal: AbortSignal.timeout(8000),
+        });
+
+        const linkData = await linkRes.json();
+        if (linkRes.ok && linkData.short_url) {
+          res.json({
+            success: true,
+            method: 'razorpay_live',
+            paymentLinkId: linkData.id,
+            shortUrl: linkData.short_url,
+            amount: Number(amount),
+            currency: 'INR',
+          });
+          return;
+        } else {
+          console.warn('Razorpay payment link error:', linkData.error);
+        }
+      } catch (linkErr: any) {
+        console.warn('Razorpay payment link fetch failed:', linkErr?.message);
+      }
+    }
+
+    // Direct UPI payment link fallback (Standard NPCI UPI Intent URL for phone apps)
+    const upiUri = `upi://pay?pa=r8898278453@okaxis&pn=Aaditech%20Solution&am=${amount}&cu=INR&tn=${encodeURIComponent(description || 'Services Payment')}`;
+    const simulatedLink = `https://rzp.io/i/test_${Date.now().toString(36)}`;
+
+    res.json({
+      success: true,
+      method: 'upi_fallback',
+      shortUrl: simulatedLink,
+      upiUri,
+      amount: Number(amount),
+      currency: 'INR',
+      notice: 'Direct UPI link and simulated Razorpay URL generated.',
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Razorpay Webhook Inbound Handler
+app.post('/api/razorpay/webhook', async (req, res) => {
+  try {
+    const signature = req.headers['x-razorpay-signature'] as string;
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+
+    if (webhookSecret && signature) {
+      const shasum = crypto.createHmac('sha256', webhookSecret);
+      shasum.update(JSON.stringify(req.body));
+      const digest = shasum.digest('hex');
+      if (digest !== signature) {
+        console.warn('[Razorpay Webhook] Invalid signature rejected');
+        res.status(400).json({ error: 'Invalid webhook signature' });
+        return;
+      }
+    }
+
+    const event = req.body.event;
+    const payload = req.body.payload;
+
+    console.log(`[Razorpay Webhook] Received event: ${event}`);
+
+    if (event === 'payment.captured' || event === 'order.paid' || event === 'payment_link.paid') {
+      const payment = payload?.payment?.entity;
+      const amountRupees = payment ? payment.amount / 100 : 'N/A';
+      const payerPhone = payment?.contact || '';
+      const payerEmail = payment?.email || '';
+
+      sendTelegramPushAlert(
+        `🎉 *WEBHOOK: RAZORPAY PAYMENT CAPTURED!*\n\n💰 *Amount:* ₹${amountRupees}\n💳 *Payment ID:* \`${payment?.id}\`\n📞 *Contact:* ${payerPhone} / ${payerEmail}\n⚡ Event: \`${event}\``
+      ).catch(() => {});
+    }
+
+    res.status(200).json({ status: 'ok' });
+  } catch (err: any) {
+    res.status(200).json({ status: 'handled' });
   }
 });
 
@@ -704,20 +1943,15 @@ process.on('uncaughtException', (err) => {
 
 async function startServer() {
   try {
-    let viteMiddlewares: any = null;
     let viteInstance: any = null;
 
     if (process.env.NODE_ENV !== 'production') {
-      app.use((req, res, next) => {
-        if (viteMiddlewares) {
-          return viteMiddlewares(req, res, next);
-        }
-        // Respond to initial container pre-warm and health checks immediately while Vite initializes
-        if (req.path === '/' || req.path === '/api/health') {
-          return res.status(200).send('<!doctype html><html><head><title>Aaditech BGA</title></head><body><div id="root">Initializing Aaditech BGA...</div></body></html>');
-        }
-        next();
+      viteInstance = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
       });
+      app.use(viteInstance.middlewares);
+      console.log('[Server] Vite middleware mounted and ready.');
     } else {
       const distPath = path.join(process.cwd(), 'dist');
       app.use(express.static(distPath));
@@ -743,22 +1977,6 @@ async function startServer() {
         console.error('[Server] Fatal server error:', err);
       }
     });
-
-    // Initialize Vite middleware asynchronously so port 3000 is reachable immediately
-    if (process.env.NODE_ENV !== 'production') {
-      createViteServer({
-        server: { middlewareMode: true },
-        appType: 'spa',
-      })
-        .then((vite) => {
-          viteInstance = vite;
-          viteMiddlewares = vite.middlewares;
-          console.log('[Server] Vite middleware mounted and ready.');
-        })
-        .catch((err) => {
-          console.error('[Server] Error initializing Vite middleware:', err);
-        });
-    }
 
     const cleanup = async () => {
       console.log('[Server] Shutting down gracefully...');

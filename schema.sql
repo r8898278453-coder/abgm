@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS `leads` (
 -- --------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `reviews` (
   `id` varchar(64) NOT NULL,
+  `company_id` varchar(64) DEFAULT NULL,
   `author` varchar(255) NOT NULL,
   `rating` int(11) NOT NULL DEFAULT 5,
   `date` varchar(64) NOT NULL,
@@ -96,7 +97,8 @@ CREATE TABLE IF NOT EXISTS `reviews` (
   `reply_date` varchar(64) DEFAULT NULL,
   `source` enum('google','facebook','justdial') NOT NULL DEFAULT 'google',
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  KEY `idx_company_review` (`company_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
@@ -104,14 +106,24 @@ CREATE TABLE IF NOT EXISTS `reviews` (
 -- --------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `content_posts` (
   `id` varchar(64) NOT NULL,
-  `channel` varchar(64) NOT NULL,
+  `company_id` varchar(64) DEFAULT NULL,
+  `title` varchar(255) DEFAULT NULL,
+  `type` varchar(64) DEFAULT 'offer',
+  `platforms` text DEFAULT NULL,
+  `channel` varchar(64) NOT NULL DEFAULT 'google',
+  `headline` varchar(255) DEFAULT NULL,
   `caption` text NOT NULL,
+  `cta` varchar(255) DEFAULT NULL,
   `image_url` text DEFAULT NULL,
-  `status` enum('draft','scheduled','published') NOT NULL DEFAULT 'scheduled',
+  `status` enum('draft','pending_approval','scheduled','published') NOT NULL DEFAULT 'scheduled',
+  `scheduled_date` varchar(64) DEFAULT NULL,
   `scheduled_time` varchar(64) NOT NULL,
+  `time_slot` varchar(64) DEFAULT NULL,
   `hashtags` text DEFAULT NULL,
+  `reel_script` text DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  KEY `idx_company_post` (`company_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
@@ -119,18 +131,40 @@ CREATE TABLE IF NOT EXISTS `content_posts` (
 -- --------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `autonomous_actions` (
   `id` varchar(64) NOT NULL,
+  `company_id` varchar(64) DEFAULT NULL,
   `type` varchar(64) NOT NULL,
   `title` varchar(255) NOT NULL,
   `description` text NOT NULL,
   `impact` varchar(128) DEFAULT NULL,
   `action_type` varchar(64) NOT NULL DEFAULT 'automatic',
-  `status` enum('completed','queued','pending_approval') NOT NULL DEFAULT 'pending_approval',
+  `status` varchar(32) NOT NULL DEFAULT 'pending_approval',
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  KEY `idx_company_action` (`company_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
--- Table structure for `business_profile`
+-- Table structure for table `company_integrations`
+-- Stores per-tenant real API credentials and live connection verification states
+-- --------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `company_integrations` (
+  `id` varchar(64) NOT NULL,
+  `company_id` varchar(64) NOT NULL,
+  `provider` varchar(64) NOT NULL,
+  `status` enum('connected','disconnected','error') NOT NULL DEFAULT 'disconnected',
+  `credentials` text DEFAULT NULL,
+  `config` text DEFAULT NULL,
+  `last_tested_at` varchar(64) DEFAULT NULL,
+  `last_error` text DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_company_provider` (`company_id`, `provider`),
+  KEY `idx_comp_integ` (`company_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+-- Table structure for table `business_profile`
 -- --------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `business_profile` (
   `id` varchar(64) NOT NULL,

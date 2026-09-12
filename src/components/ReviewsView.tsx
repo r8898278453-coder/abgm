@@ -14,6 +14,10 @@ import {
   Download,
   X,
   Printer,
+  Plus,
+  Trash2,
+  Database,
+  RefreshCw,
 } from 'lucide-react';
 import { ReviewItem, BusinessProfile } from '../types';
 import { generateReviewReply } from '../services/aiService';
@@ -21,13 +25,21 @@ import { generateReviewReply } from '../services/aiService';
 interface ReviewsViewProps {
   reviews: ReviewItem[];
   business: BusinessProfile;
+  companyId?: string;
   onAddReply: (reviewId: string, replyText: string) => void;
+  onAddNewReview?: (review: Partial<ReviewItem>) => void;
+  onDeleteReview?: (reviewId: string) => void;
+  onRefreshReviews?: () => void;
 }
 
 export const ReviewsView: React.FC<ReviewsViewProps> = ({
   reviews,
   business,
+  companyId,
   onAddReply,
+  onAddNewReview,
+  onDeleteReview,
+  onRefreshReviews,
 }) => {
   const [filter, setFilter] = useState<'all' | 'unanswered' | 'negative' | 'positive'>('all');
   const [generatingForId, setGeneratingForId] = useState<string | null>(null);
@@ -36,6 +48,16 @@ export const ReviewsView: React.FC<ReviewsViewProps> = ({
   const [copiedLink, setCopiedLink] = useState(false);
   const [activeTab, setActiveTab] = useState<'inbox' | 'collection'>('inbox');
   const [isStandeeModalOpen, setIsStandeeModalOpen] = useState(false);
+  const [isAddReviewModalOpen, setIsAddReviewModalOpen] = useState(false);
+
+  // New Review Form State
+  const [newAuthor, setNewAuthor] = useState('');
+  const [newRating, setNewRating] = useState(5);
+  const [newContent, setNewContent] = useState('');
+  const [newTopic, setNewTopic] = useState('Customer Experience');
+  const [newIsOperationalIssue, setNewIsOperationalIssue] = useState(false);
+  const [newSource, setNewSource] = useState<'google' | 'justdial' | 'direct'>('google');
+  const [submittingReview, setSubmittingReview] = useState(false);
 
   const handleDownloadSvg = () => {
     const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="100%" height="100%">
@@ -100,33 +122,51 @@ export const ReviewsView: React.FC<ReviewsViewProps> = ({
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-black text-slate-900 flex items-center gap-2">
-            <Star className="w-7 h-7 text-amber-500 fill-amber-500" />
-            Review Management & AI Reply Engine
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-black text-slate-900 flex items-center gap-2">
+              <Star className="w-7 h-7 text-amber-500 fill-amber-500" />
+              Review Management & AI Reply Engine
+            </h1>
+            <span className="hidden md:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
+              <Database className="w-3 h-3 text-emerald-600" />
+              MySQL Live Sync
+            </span>
+          </div>
           <p className="text-slate-500 text-xs sm:text-sm mt-0.5">
             Centralized multi-platform inbox with sentiment classification, 1-click compliant AI responses & QR generator.
           </p>
         </div>
 
-        {/* View Toggle in Bento Capsule */}
-        <div className="flex items-center gap-1 bg-white p-1.5 rounded-2xl border border-slate-200 shadow-xs text-xs">
-          <button
-            onClick={() => setActiveTab('inbox')}
-            className={`px-3 py-1.5 rounded-xl font-bold transition ${
-              activeTab === 'inbox' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Review Inbox ({reviews.length})
-          </button>
-          <button
-            onClick={() => setActiveTab('collection')}
-            className={`px-3 py-1.5 rounded-xl font-bold transition ${
-              activeTab === 'collection' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Collection QR & Links
-          </button>
+        {/* View Toggle & Add Review in Bento Capsule */}
+        <div className="flex items-center gap-2">
+          {onAddNewReview && (
+            <button
+              onClick={() => setIsAddReviewModalOpen(true)}
+              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl text-xs font-bold transition shadow-xs flex items-center gap-1.5"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Log Review</span>
+            </button>
+          )}
+
+          <div className="flex items-center gap-1 bg-white p-1.5 rounded-2xl border border-slate-200 shadow-xs text-xs">
+            <button
+              onClick={() => setActiveTab('inbox')}
+              className={`px-3 py-1.5 rounded-xl font-bold transition ${
+                activeTab === 'inbox' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Review Inbox ({reviews.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('collection')}
+              className={`px-3 py-1.5 rounded-xl font-bold transition ${
+                activeTab === 'collection' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Collection QR & Links
+            </button>
+          </div>
         </div>
       </div>
 
@@ -338,6 +378,19 @@ export const ReviewsView: React.FC<ReviewsViewProps> = ({
                       <span className="text-[11px] text-slate-600 bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-200 font-medium">
                         Topic: {review.topic}
                       </span>
+                      {onDeleteReview && (
+                        <button
+                          onClick={() => {
+                            if (window.confirm(`Delete review from ${review.author}?`)) {
+                              onDeleteReview(review.id);
+                            }
+                          }}
+                          title="Delete Review from MySQL"
+                          className="text-slate-400 hover:text-rose-600 p-1 rounded-lg hover:bg-rose-50 transition ml-1"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -494,6 +547,151 @@ export const ReviewsView: React.FC<ReviewsViewProps> = ({
                 <Printer className="w-3.5 h-3.5" /> Print / Save PDF
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Log Review Modal (Direct MySQL Persistence) */}
+      {isAddReviewModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden">
+            <div className="p-4 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Star className="w-5 h-5 text-amber-400 fill-amber-400" />
+                <span className="font-bold text-sm">Log Customer Review to MySQL</span>
+              </div>
+              <button
+                onClick={() => setIsAddReviewModalOpen(false)}
+                className="w-7 h-7 rounded-full flex items-center justify-center text-slate-400 hover:text-white hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!newAuthor.trim() || !newContent.trim() || !onAddNewReview) return;
+                setSubmittingReview(true);
+                try {
+                  await onAddNewReview({
+                    author: newAuthor.trim(),
+                    rating: newRating,
+                    content: newContent.trim(),
+                    topic: newTopic,
+                    isOperationalIssue: newIsOperationalIssue,
+                    source: newSource,
+                    relativeTime: 'Just now',
+                    date: new Date().toISOString().split('T')[0],
+                  });
+                  setIsAddReviewModalOpen(false);
+                  setNewAuthor('');
+                  setNewContent('');
+                  setNewRating(5);
+                } finally {
+                  setSubmittingReview(false);
+                }
+              }}
+              className="p-6 space-y-4 text-xs"
+            >
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Customer / Reviewer Name *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Vikramaditya Sharma"
+                  value={newAuthor}
+                  onChange={(e) => setNewAuthor(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:border-indigo-500 font-medium"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Star Rating (1 - 5)</label>
+                  <div className="flex items-center gap-1">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <button
+                        type="button"
+                        key={star}
+                        onClick={() => setNewRating(star)}
+                        className={`text-lg transition ${star <= newRating ? 'text-amber-500' : 'text-slate-200'}`}
+                      >
+                        ★
+                      </button>
+                    ))}
+                    <span className="ml-2 font-bold text-slate-700 text-xs">{newRating}.0 Stars</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Channel Source</label>
+                  <select
+                    value={newSource}
+                    onChange={(e) => setNewSource(e.target.value as any)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:border-indigo-500 font-medium"
+                  >
+                    <option value="google">Google Maps (GMB)</option>
+                    <option value="justdial">JustDial / IndiaMART</option>
+                    <option value="direct">Direct Customer Feedback</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Feedback Topic Category</label>
+                <input
+                  type="text"
+                  value={newTopic}
+                  onChange={(e) => setNewTopic(e.target.value)}
+                  placeholder="e.g. Turnaround Time, Screen Replacement, Staff Behavior"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:border-indigo-500 font-medium"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Review Content / Message *</label>
+                <textarea
+                  required
+                  rows={4}
+                  placeholder="Write customer review text..."
+                  value={newContent}
+                  onChange={(e) => setNewContent(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-900 focus:outline-none focus:border-indigo-500 font-medium leading-relaxed"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <input
+                  type="checkbox"
+                  id="opIssue"
+                  checked={newIsOperationalIssue}
+                  onChange={(e) => setNewIsOperationalIssue(e.target.checked)}
+                  className="rounded text-rose-600 focus:ring-rose-500"
+                />
+                <label htmlFor="opIssue" className="text-slate-700 font-medium cursor-pointer">
+                  Flag as Operational Issue (Requires Manager Escalation)
+                </label>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsAddReviewModalOpen(false)}
+                  className="px-4 py-2 rounded-xl text-slate-600 font-bold hover:bg-slate-100 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingReview}
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition shadow-xs flex items-center gap-1.5"
+                >
+                  <Database className="w-3.5 h-3.5" />
+                  <span>{submittingReview ? 'Saving to MySQL...' : 'Save to MySQL Database'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
