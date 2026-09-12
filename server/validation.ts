@@ -241,6 +241,29 @@ export const createPostSchema = z.object({
   company_id: z.string().trim().max(64).optional(),
 });
 
+// 8. Razorpay Payment Verification Schema (Signature strictly required)
+export const verifyRazorpayPaymentSchema = z.object({
+  razorpay_order_id: z
+    .string()
+    .trim()
+    .min(1, 'Razorpay Order ID is required')
+    .max(100),
+  razorpay_payment_id: z
+    .string()
+    .trim()
+    .min(1, 'Razorpay Payment ID is required')
+    .max(100),
+  razorpay_signature: z
+    .string()
+    .trim()
+    .min(10, 'Razorpay cryptographic signature is required for payment verification')
+    .max(200),
+  companyId: z.string().trim().max(64).optional(),
+  leadId: z.string().trim().max(64).optional(),
+  planName: z.string().trim().max(128).optional(),
+  amount: z.union([z.number(), z.string()]).optional(),
+});
+
 // ====================================================================
 // Express Middleware Generator for Zod Schemas
 // ====================================================================

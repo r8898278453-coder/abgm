@@ -7,7 +7,7 @@ export interface DbUser {
   password_hash: string;
   salt: string;
   full_name: string;
-  role: 'owner' | 'manager' | 'agency';
+  role: 'platform_admin' | 'owner' | 'manager' | 'agency';
   created_at?: string;
 }
 
@@ -211,7 +211,7 @@ function getInitialEnvAdmin(): DbUser[] {
       password_hash: hash,
       salt,
       full_name: process.env.INITIAL_ADMIN_NAME?.trim() || 'System Administrator',
-      role: 'owner',
+      role: 'platform_admin',
       created_at: new Date().toISOString(),
     }];
   }
@@ -470,7 +470,7 @@ async function autoInitializeTables(dbPool: mysql.Pool) {
           const adminName = process.env.INITIAL_ADMIN_NAME?.trim() || 'System Administrator';
           await connection.query(`
             INSERT INTO users (id, email, password_hash, salt, full_name, role)
-            VALUES (?, ?, ?, ?, ?, 'owner')
+            VALUES (?, ?, ?, ?, ?, 'platform_admin')
           `, [adminId, envAdminEmail, adminHash, adminSalt, adminName]);
           console.log(`[Hostinger MySQL] Initial administrator provisioned for: ${envAdminEmail}`);
         }
@@ -780,6 +780,20 @@ export async function createUser(data: {
 }
 
 // ---------------- MULTI-COMPANY MANAGEMENT ---------------- //
+
+export async function getAllCompanies(): Promise<DbCompany[]> {
+  try {
+    const db = await getDbPool();
+    if (db) {
+      const [rows]: any = await db.query('SELECT * FROM companies ORDER BY created_at ASC');
+      return rows as DbCompany[];
+    }
+  } catch (err: any) {
+    console.warn('[getAllCompanies] MySQL error:', err?.message);
+  }
+
+  return inMemoryCompanies;
+}
 
 export async function getUserCompanies(userId: string): Promise<DbCompany[]> {
   try {

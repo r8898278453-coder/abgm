@@ -15,6 +15,7 @@ import {
   createUser,
   verifyPassword,
   upgradeUserPassword,
+  getAllCompanies,
   getUserCompanies,
   getCompanyById,
   createCompany,
@@ -61,6 +62,7 @@ import {
   createReviewSchema,
   createCompanySchema,
   createPostSchema,
+  verifyRazorpayPaymentSchema,
   validateBody,
 } from './server/validation';
 
@@ -291,7 +293,7 @@ app.get('/api/auth/me', async (req, res) => {
 
 // ==================== MULTI-COMPANY APIS ==================== //
 
-// Get all companies for current user
+// Get all companies for current user (or all platform companies if platform_admin)
 app.get('/api/companies', async (req, res) => {
   try {
     const user = await getAuthUserFromRequest(req);
@@ -300,7 +302,7 @@ app.get('/api/companies', async (req, res) => {
       return;
     }
 
-    const companies = await getUserCompanies(user.id);
+    const companies = user.role === 'platform_admin' ? await getAllCompanies() : await getUserCompanies(user.id);
     res.json({ success: true, companies });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message });
@@ -355,7 +357,7 @@ app.get('/api/companies/:id/data', async (req, res) => {
       return;
     }
 
-    if (company.user_id !== user.id && user.role !== 'owner') {
+    if (company.user_id !== user.id && user.role !== 'platform_admin') {
       res.status(403).json({ success: false, error: 'Access denied to this company workspace' });
       return;
     }
@@ -383,7 +385,7 @@ app.put('/api/companies/:id/data', async (req, res) => {
       return;
     }
 
-    if (company.user_id !== user.id && user.role !== 'owner') {
+    if (company.user_id !== user.id && user.role !== 'platform_admin') {
       res.status(403).json({ success: false, error: 'Access denied to this company workspace' });
       return;
     }
@@ -425,7 +427,22 @@ function maskCredentialsObj(creds: Record<string, any>): Record<string, any> {
 app.get('/api/integrations', async (req, res) => {
   try {
     const user = await getAuthUserFromRequest(req);
-    const companyId = (req.query.companyId || req.query.company_id || (user ? getDefaultCompanyId() : 'comp_aaditech_main')) as string;
+    let companyId = (req.query.companyId || req.query.company_id) as string | undefined;
+
+    if (user) {
+      if (companyId) {
+        const company = await getCompanyById(companyId);
+        if (company && company.user_id !== user.id && user.role !== 'platform_admin') {
+          res.status(403).json({ success: false, error: 'Access denied to this company integrations' });
+          return;
+        }
+      } else {
+        const userCompanies = await getUserCompanies(user.id);
+        companyId = userCompanies[0]?.id || (await getDefaultCompanyId()) || 'comp_aaditech_main';
+      }
+    } else {
+      companyId = companyId || (await getDefaultCompanyId()) || 'comp_aaditech_main';
+    }
 
     const storedIntegrations = await getCompanyIntegrations(companyId);
 
@@ -784,11 +801,26 @@ app.post('/api/integrations/test', async (req, res) => {
 app.post('/api/integrations/save', async (req, res) => {
   try {
     const user = await getAuthUserFromRequest(req);
+    if (!user) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
+
     const { companyId, provider, credentials, config } = req.body;
 
-    const targetCompanyId = companyId || (user ? getDefaultCompanyId() : 'comp_aaditech_main');
+    let targetCompanyId = companyId;
+    if (!targetCompanyId) {
+      const userCompanies = await getUserCompanies(user.id);
+      targetCompanyId = userCompanies[0]?.id;
+    }
     if (!targetCompanyId || !provider) {
       res.status(400).json({ success: false, error: 'Company ID and Provider are required' });
+      return;
+    }
+
+    const company = await getCompanyById(targetCompanyId);
+    if (company && company.user_id !== user.id && user.role !== 'platform_admin') {
+      res.status(403).json({ success: false, error: 'Access denied to manage integrations for this company' });
       return;
     }
 
@@ -833,8 +865,27 @@ app.post('/api/integrations/save', async (req, res) => {
 app.delete('/api/integrations/:provider', async (req, res) => {
   try {
     const user = await getAuthUserFromRequest(req);
+    if (!user) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
+
     const { provider } = req.params;
-    const companyId = (req.query.companyId || req.query.company_id || (user ? getDefaultCompanyId() : 'comp_aaditech_main')) as string;
+    let companyId = (req.query.companyId || req.query.company_id) as string | undefined;
+    if (!companyId) {
+      const userCompanies = await getUserCompanies(user.id);
+      companyId = userCompanies[0]?.id;
+    }
+    if (!companyId) {
+      res.status(400).json({ success: false, error: 'Company ID is required' });
+      return;
+    }
+
+    const company = await getCompanyById(companyId);
+    if (company && company.user_id !== user.id && user.role !== 'platform_admin') {
+      res.status(403).json({ success: false, error: 'Access denied to delete integrations for this company' });
+      return;
+    }
 
     await deleteCompanyIntegration(companyId, provider);
     res.json({ success: true, message: `Disconnected ${provider}` });
@@ -855,7 +906,7 @@ app.get('/api/reviews', async (req, res) => {
       const userCompanies = await getUserCompanies(user.id);
       if (userCompanies.length > 0) {
         if (targetCompanyId) {
-          const authorized = userCompanies.some((c) => c.id === targetCompanyId) || user.role === 'owner';
+          const authorized = userCompanies.some((c) => c.id === targetCompanyId) || user.role === 'platform_admin';
           if (!authorized) {
             res.status(403).json({ success: false, error: 'Access denied to this company reviews' });
             return;
@@ -889,7 +940,7 @@ app.post('/api/reviews', validateBody(createReviewSchema), async (req, res) => {
       const userCompanies = await getUserCompanies(user.id);
       if (userCompanies.length > 0) {
         if (targetCompanyId) {
-          const authorized = userCompanies.some((c) => c.id === targetCompanyId) || user.role === 'owner';
+          const authorized = userCompanies.some((c) => c.id === targetCompanyId) || user.role === 'platform_admin';
           if (!authorized) {
             targetCompanyId = userCompanies[0].id;
           }
@@ -936,6 +987,13 @@ app.post(['/api/reviews/:id/reply', '/api/reviews/:id/replyText'], validateBody(
     const { replyText } = req.body;
 
     const companyId = (req.body.companyId || req.body.company_id || req.query.companyId) as string | undefined;
+    if (companyId) {
+      const company = await getCompanyById(companyId);
+      if (company && company.user_id !== user.id && user.role !== 'platform_admin') {
+        res.status(403).json({ success: false, error: 'Access denied to reply to this company review' });
+        return;
+      }
+    }
     const success = await updateReviewReply(id, replyText.trim(), companyId);
 
     if (!success) {
@@ -960,6 +1018,13 @@ app.delete('/api/reviews/:id', async (req, res) => {
 
     const { id } = req.params;
     const companyId = (req.query.companyId || req.query.company_id || req.body.companyId) as string | undefined;
+    if (companyId) {
+      const company = await getCompanyById(companyId);
+      if (company && company.user_id !== user.id && user.role !== 'platform_admin') {
+        res.status(403).json({ success: false, error: 'Access denied to delete this company review' });
+        return;
+      }
+    }
     await deleteReview(id, companyId);
     res.json({ success: true, message: 'Review deleted from MySQL' });
   } catch (err: any) {
@@ -979,7 +1044,7 @@ app.get(['/api/content-posts', '/api/posts'], async (req, res) => {
       const userCompanies = await getUserCompanies(user.id);
       if (userCompanies.length > 0) {
         if (targetCompanyId) {
-          const authorized = userCompanies.some((c) => c.id === targetCompanyId) || user.role === 'owner';
+          const authorized = userCompanies.some((c) => c.id === targetCompanyId) || user.role === 'platform_admin';
           if (!authorized) {
             res.status(403).json({ success: false, error: 'Access denied to this company content' });
             return;
@@ -1036,7 +1101,7 @@ app.post(['/api/content-posts', '/api/posts'], validateBody(createPostSchema), a
     const userCompanies = await getUserCompanies(user.id);
     if (userCompanies.length > 0) {
       if (targetCompanyId) {
-        const authorized = userCompanies.some((c) => c.id === targetCompanyId) || user.role === 'owner';
+        const authorized = userCompanies.some((c) => c.id === targetCompanyId) || user.role === 'platform_admin';
         if (!authorized) {
           targetCompanyId = userCompanies[0].id;
         }
@@ -1090,6 +1155,13 @@ app.patch(['/api/content-posts/:id/status', '/api/posts/:id/status'], async (req
     }
 
     const companyId = (req.body.companyId || req.body.company_id || req.query.companyId) as string | undefined;
+    if (companyId) {
+      const company = await getCompanyById(companyId);
+      if (company && company.user_id !== user.id && user.role !== 'platform_admin') {
+        res.status(403).json({ success: false, error: 'Access denied to update this content post' });
+        return;
+      }
+    }
     await updateContentPostStatus(id, status, companyId);
     res.json({ success: true, message: `Post status updated to ${status} in MySQL` });
   } catch (err: any) {
@@ -1108,6 +1180,13 @@ app.delete(['/api/content-posts/:id', '/api/posts/:id'], async (req, res) => {
 
     const { id } = req.params;
     const companyId = (req.query.companyId || req.query.company_id || req.body.companyId) as string | undefined;
+    if (companyId) {
+      const company = await getCompanyById(companyId);
+      if (company && company.user_id !== user.id && user.role !== 'platform_admin') {
+        res.status(403).json({ success: false, error: 'Access denied to delete this content post' });
+        return;
+      }
+    }
     await deleteContentPost(id, companyId);
     res.json({ success: true, message: 'Content post deleted from MySQL' });
   } catch (err: any) {
@@ -1279,7 +1358,7 @@ app.get('/api/leads', async (req, res) => {
         res.status(404).json({ success: false, error: 'Company not found' });
         return;
       }
-      if (company.user_id !== user.id && user.role !== 'owner') {
+      if (company.user_id !== user.id && user.role !== 'platform_admin') {
         res.status(403).json({ success: false, error: 'Access denied to this company leads' });
         return;
       }
@@ -1289,14 +1368,14 @@ app.get('/api/leads', async (req, res) => {
     }
 
     // If no companyId specified:
-    // Global owners can access all leads
-    if (user.role === 'owner') {
+    // Only platform_admin can access all leads across all tenants
+    if (user.role === 'platform_admin') {
       const leads = await getAllLeads();
       res.json({ success: true, leads });
       return;
     }
 
-    // Non-owners can only see leads belonging to their owned companies
+    // Tenant owners / managers can only see leads belonging to their owned companies
     const userCompanies = await getUserCompanies(user.id);
     if (!userCompanies || userCompanies.length === 0) {
       res.json({ success: true, leads: [] });
@@ -1324,7 +1403,7 @@ app.post('/api/leads', leadsRateLimiter, validateBody(createLeadSchema), async (
       const userCompanies = await getUserCompanies(authUser.id);
       if (userCompanies.length > 0) {
         if (targetCompanyId) {
-          const userOwnsCompany = userCompanies.some((c) => c.id === targetCompanyId) || authUser.role === 'owner';
+          const userOwnsCompany = userCompanies.some((c) => c.id === targetCompanyId) || authUser.role === 'platform_admin';
           if (!userOwnsCompany) {
             // Re-bind to user's first company to prevent cross-tenant leakage
             targetCompanyId = userCompanies[0].id;
@@ -1388,11 +1467,11 @@ app.patch('/api/leads/:id/stage', validateBody(updateLeadStageSchema), async (re
     // Verify IDOR authorization
     if (lead.company_id) {
       const company = await getCompanyById(lead.company_id);
-      if (company && company.user_id !== user.id && user.role !== 'owner') {
+      if (company && company.user_id !== user.id && user.role !== 'platform_admin') {
         res.status(403).json({ success: false, error: 'Access denied to update this lead' });
         return;
       }
-    } else if (user.role !== 'owner') {
+    } else if (user.role !== 'platform_admin') {
       res.status(403).json({ success: false, error: 'Access denied to update global lead' });
       return;
     }
@@ -1723,52 +1802,71 @@ app.post('/api/razorpay/create-order', async (req, res) => {
 });
 
 // Verify Razorpay Payment Signature
-app.post('/api/razorpay/verify-payment', async (req, res) => {
+app.post('/api/razorpay/verify-payment', validateBody(verifyRazorpayPaymentSchema), async (req, res) => {
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, companyId, leadId, planName, amount } = req.body;
-    if (!razorpay_order_id || !razorpay_payment_id) {
-      res.status(400).json({ success: false, error: 'Order ID and Payment ID are required' });
-      return;
-    }
 
     const creds = await resolveRazorpayCredentials(companyId);
 
-    let isAuthentic = false;
-    if (creds.configured && creds.keySecret && razorpay_signature) {
-      const generatedSignature = crypto
-        .createHmac('sha256', creds.keySecret)
-        .update(`${razorpay_order_id}|${razorpay_payment_id}`)
-        .digest('hex');
-      isAuthentic = generatedSignature === razorpay_signature;
-    } else {
-      // In sandbox preview mode without keys, accept test payment IDs
-      isAuthentic = true;
-    }
-
-    if (isAuthentic) {
-      // Notify Telegram channel of verified payment
-      const paymentMsg = `💰 *PAYMENT CONFIRMED VIA RAZORPAY!*\n\n💳 *Payment ID:* \`${razorpay_payment_id}\`\n📦 *Order ID:* \`${razorpay_order_id}\`\n💵 *Amount:* ₹${amount || 'Paid'}\n📌 *Plan/Service:* ${planName || 'Digital Services'}\n\n✅ Transaction verified & receipt issued.`;
-      sendTelegramPushAlert(paymentMsg).catch(() => {});
-
-      // If tied to lead, auto-advance lead stage to 'won'
-      if (leadId) {
-        updateLeadStatus(leadId, 'won').catch(() => {});
-      }
-
-      res.json({
-        success: true,
-        verified: true,
-        paymentId: razorpay_payment_id,
-        orderId: razorpay_order_id,
-        message: 'Payment signature verified successfully!',
-      });
-    } else {
+    // CRITICAL SECURITY ENFORCEMENT:
+    // Never accept fake or unverified payments. Verification MUST fail if Razorpay credentials are not configured!
+    if (!creds.configured || !creds.keySecret) {
       res.status(400).json({
         success: false,
         verified: false,
-        error: 'Payment signature verification failed. Invalid HMAC signature.',
+        error: 'Razorpay payment gateway credentials (Key ID and Secret) are not configured. Cannot verify payment without merchant credentials in Integrations settings.',
       });
+      return;
     }
+
+    const generatedSignature = crypto
+      .createHmac('sha256', creds.keySecret)
+      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+      .digest('hex');
+
+    const sigBuf = Buffer.from(razorpay_signature, 'utf-8');
+    const genBuf = Buffer.from(generatedSignature, 'utf-8');
+
+    const isAuthentic =
+      sigBuf.length === genBuf.length &&
+      crypto.timingSafeEqual(sigBuf, genBuf);
+
+    if (!isAuthentic) {
+      res.status(400).json({
+        success: false,
+        verified: false,
+        error: 'Payment signature verification failed. Invalid cryptographic HMAC-SHA256 signature.',
+      });
+      return;
+    }
+
+    // If tied to a lead, verify tenant matching and update status to 'won'
+    if (leadId) {
+      const lead = await getLeadById(leadId);
+      if (lead) {
+        if (companyId && lead.company_id && lead.company_id !== companyId) {
+          res.status(403).json({
+            success: false,
+            verified: false,
+            error: 'Lead does not belong to the specified company workspace',
+          });
+          return;
+        }
+        await updateLeadStatus(leadId, 'won');
+      }
+    }
+
+    // Dispatch verified payment alert to owner's Telegram
+    const paymentMsg = `💰 *REAL PAYMENT CONFIRMED VIA RAZORPAY!*\n\n💳 *Payment ID:* \`${razorpay_payment_id}\`\n📦 *Order ID:* \`${razorpay_order_id}\`\n💵 *Amount:* ₹${amount || 'Paid'}\n📌 *Plan/Service:* ${planName || 'Digital Services'}\n\n✅ Cryptographic HMAC-SHA256 signature verified against Razorpay Key Secret.`;
+    sendTelegramPushAlert(paymentMsg).catch(() => {});
+
+    res.json({
+      success: true,
+      verified: true,
+      paymentId: razorpay_payment_id,
+      orderId: razorpay_order_id,
+      message: 'Payment signature verified successfully against Razorpay secret!',
+    });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message });
   }
@@ -1867,7 +1965,9 @@ app.post('/api/razorpay/webhook', async (req, res) => {
       const shasum = crypto.createHmac('sha256', webhookSecret);
       shasum.update(JSON.stringify(req.body));
       const digest = shasum.digest('hex');
-      if (digest !== signature) {
+      const sigBuf = Buffer.from(signature, 'utf-8');
+      const digBuf = Buffer.from(digest, 'utf-8');
+      if (sigBuf.length !== digBuf.length || !crypto.timingSafeEqual(sigBuf, digBuf)) {
         console.warn('[Razorpay Webhook] Invalid signature rejected');
         res.status(400).json({ error: 'Invalid webhook signature' });
         return;

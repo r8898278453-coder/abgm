@@ -221,7 +221,7 @@ export interface AuthUser {
   id: string;
   email: string;
   full_name: string;
-  role: 'owner' | 'manager' | 'agency';
+  role: 'platform_admin' | 'owner' | 'manager' | 'agency';
 }
 
 export interface CompanyRecord {
