@@ -3,7 +3,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 const config: CapacitorConfig = {
   appId: 'in.aaditechs.growthmanager',
   appName: 'Aaditech Solution AI',
-  webDir: 'dist',
+  webDir: 'dist/client',
   server: {
     androidScheme: 'https',
   },

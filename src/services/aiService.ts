@@ -1,4 +1,5 @@
 import { getStoredToken } from './authService';
+import { API_BASE_URL } from '../config/apiConfig';
 
 export interface ChatResponse {
   reply: string;
@@ -37,7 +38,7 @@ export async function askAiChat(params: {
   language?: string;
 }): Promise<string> {
   try {
-    const res = await fetch('/api/ai/chat', {
+    const res = await fetch(`${API_BASE_URL}/api/ai/chat`, {
       method: 'POST',
       headers: getAiHeaders(),
       body: JSON.stringify(params),
@@ -83,7 +84,7 @@ export async function generateReviewReply(params: {
   businessName?: string;
 }): Promise<string> {
   try {
-    const res = await fetch('/api/ai/reply-review', {
+    const res = await fetch(`${API_BASE_URL}/api/ai/reply-review`, {
       method: 'POST',
       headers: getAiHeaders(),
       body: JSON.stringify(params),
@@ -121,7 +122,7 @@ export async function generateMarketingContent(params: {
   targetAudience?: string;
 }): Promise<ContentGenerationResponse> {
   try {
-    const res = await fetch('/api/ai/generate-content', {
+    const res = await fetch(`${API_BASE_URL}/api/ai/generate-content`, {
       method: 'POST',
       headers: getAiHeaders(),
       body: JSON.stringify(params),

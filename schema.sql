@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `salt` varchar(64) NOT NULL,
   `full_name` varchar(128) NOT NULL,
   `role` varchar(32) DEFAULT 'owner',
+  `is_platform_admin` tinyint(1) NOT NULL DEFAULT 0,
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `idx_user_email` (`email`)

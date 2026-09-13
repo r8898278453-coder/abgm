@@ -37,7 +37,10 @@ import {
   createContentPost,
   updateContentPostStatus,
   deleteContentPost,
+  getGoogleProfileCache,
+  saveGoogleProfileCache,
 } from './server/db';
+import { startScheduler, stopScheduler } from './server/scheduler';
 import { generateAuthToken, getAuthUserFromRequest } from './server/auth';
 import {
   loginProtectionMiddleware,
@@ -188,6 +191,7 @@ app.post('/api/auth/register', registerRateLimiter, validateBody(registerSchema)
         email: user.email,
         full_name: user.full_name,
         role: user.role,
+        is_platform_admin: Boolean(user.is_platform_admin),
       },
     });
   } catch (err: any) {
@@ -261,6 +265,7 @@ app.post('/api/auth/login', loginProtectionMiddleware, validateBody(loginSchema)
         email: user.email,
         full_name: user.full_name,
         role: user.role,
+        is_platform_admin: Boolean(user.is_platform_admin),
       },
     });
   } catch (err: any) {
@@ -284,6 +289,7 @@ app.get('/api/auth/me', async (req, res) => {
         email: user.email,
         full_name: user.full_name,
         role: user.role,
+        is_platform_admin: Boolean(user.is_platform_admin),
       },
     });
   } catch (err: any) {
@@ -302,7 +308,7 @@ app.get('/api/companies', async (req, res) => {
       return;
     }
 
-    const companies = user.role === 'platform_admin' ? await getAllCompanies() : await getUserCompanies(user.id);
+    const companies = user.is_platform_admin ? await getAllCompanies() : await getUserCompanies(user.id);
     res.json({ success: true, companies });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message });
@@ -357,7 +363,7 @@ app.get('/api/companies/:id/data', async (req, res) => {
       return;
     }
 
-    if (company.user_id !== user.id && user.role !== 'platform_admin') {
+    if (company.user_id !== user.id && !user.is_platform_admin) {
       res.status(403).json({ success: false, error: 'Access denied to this company workspace' });
       return;
     }
@@ -385,7 +391,7 @@ app.put('/api/companies/:id/data', async (req, res) => {
       return;
     }
 
-    if (company.user_id !== user.id && user.role !== 'platform_admin') {
+    if (company.user_id !== user.id && !user.is_platform_admin) {
       res.status(403).json({ success: false, error: 'Access denied to this company workspace' });
       return;
     }
@@ -393,6 +399,175 @@ app.put('/api/companies/:id/data', async (req, res) => {
     const { data } = req.body;
     await saveCompanyDataPayload(id, data);
     res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Real Google Business Profile & Places API data sync with 6-hour caching
+app.get('/api/companies/:id/google-profile', async (req, res) => {
+  try {
+    const user = await getAuthUserFromRequest(req);
+    if (!user) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
+
+    const { id } = req.params;
+    const company = await getCompanyById(id);
+    if (!company) {
+      res.status(404).json({ success: false, error: 'Company not found' });
+      return;
+    }
+
+    if (company.user_id !== user.id && !user.is_platform_admin) {
+      res.status(403).json({ success: false, error: 'Access denied to this company workspace' });
+      return;
+    }
+
+    const integration = await getCompanyIntegration(id, 'google_business');
+    const placeId = (integration?.credentials?.placeId || '').trim();
+    let apiKey = (integration?.credentials?.apiKey || '').trim();
+
+    if (!apiKey) {
+      apiKey = (
+        process.env.GOOGLE_MAPS_API_KEY ||
+        process.env.GOOGLE_PLACES_API_KEY ||
+        process.env.VITE_GOOGLE_MAPS_API_KEY ||
+        ''
+      ).trim();
+    }
+
+    if (!placeId || !apiKey) {
+      res.json({
+        success: true,
+        configured: false,
+        hasPlaceId: Boolean(placeId),
+        hasApiKey: Boolean(apiKey),
+        message: 'Google Business Profile integration not configured. Provide Place ID and API key in Integrations tab.',
+      });
+      return;
+    }
+
+    const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+    const forceRefresh = req.query.refresh === 'true' || req.query.force === 'true';
+    const cached = await getGoogleProfileCache(id);
+
+    if (!forceRefresh && cached && cached.place_id === placeId) {
+      const cacheAge = Date.now() - new Date(cached.cached_at).getTime();
+      if (cacheAge < CACHE_TTL_MS) {
+        res.json({
+          success: true,
+          configured: true,
+          cached: true,
+          cachedAt: cached.cached_at,
+          data: cached.data,
+        });
+        return;
+      }
+    }
+
+    // Call Google Places Details API
+    const gUrl = new URL('https://maps.googleapis.com/maps/api/place/details/json');
+    gUrl.searchParams.set('place_id', placeId);
+    gUrl.searchParams.set('key', apiKey);
+    gUrl.searchParams.set(
+      'fields',
+      'name,rating,user_ratings_total,opening_hours,formatted_phone_number,international_phone_number,formatted_address,website,url,reviews,photos,business_status'
+    );
+
+    try {
+      const gRes = await fetch(gUrl.toString(), { signal: AbortSignal.timeout(9000) });
+      const gData = await gRes.json();
+
+      if (gData.status === 'OK' && gData.result) {
+        const result = gData.result;
+        const profileData = {
+          place_id: placeId,
+          name: result.name,
+          rating: typeof result.rating === 'number' ? result.rating : null,
+          user_ratings_total: typeof result.user_ratings_total === 'number' ? result.user_ratings_total : 0,
+          formatted_phone_number: result.formatted_phone_number || result.international_phone_number || null,
+          formatted_address: result.formatted_address || null,
+          website: result.website || null,
+          url: result.url || null,
+          opening_hours: result.opening_hours
+            ? {
+                open_now: result.opening_hours.open_now,
+                weekday_text: result.opening_hours.weekday_text || [],
+                periods: result.opening_hours.periods || [],
+              }
+            : null,
+          business_status: result.business_status || 'OPERATIONAL',
+          photos_count: Array.isArray(result.photos) ? result.photos.length : 0,
+          photos: Array.isArray(result.photos)
+            ? result.photos.slice(0, 10).map((p: any) => ({
+                photo_reference: p.photo_reference,
+                width: p.width,
+                height: p.height,
+              }))
+            : [],
+          reviews: Array.isArray(result.reviews)
+            ? result.reviews.slice(0, 10).map((r: any) => ({
+                author_name: r.author_name,
+                author_url: r.author_url,
+                profile_photo_url: r.profile_photo_url,
+                rating: r.rating,
+                text: r.text,
+                relative_time_description: r.relative_time_description,
+                time: r.time,
+              }))
+            : [],
+        };
+
+        await saveGoogleProfileCache(id, placeId, profileData);
+
+        res.json({
+          success: true,
+          configured: true,
+          cached: false,
+          cachedAt: new Date().toISOString(),
+          data: profileData,
+        });
+        return;
+      }
+
+      // If Google returned an error status but we have a cached copy
+      if (cached && cached.place_id === placeId) {
+        res.json({
+          success: true,
+          configured: true,
+          cached: true,
+          cachedAt: cached.cached_at,
+          warning: `Google Places API returned ${gData.status}. Serving previously cached data.`,
+          data: cached.data,
+        });
+        return;
+      }
+
+      res.status(400).json({
+        success: false,
+        configured: true,
+        error: `Google Places API error (${gData.status}): ${gData.error_message || 'Please check Place ID and API key permissions'}`,
+      });
+    } catch (apiErr: any) {
+      if (cached && cached.place_id === placeId) {
+        res.json({
+          success: true,
+          configured: true,
+          cached: true,
+          cachedAt: cached.cached_at,
+          warning: `Google Places API request timed out. Serving previously cached data.`,
+          data: cached.data,
+        });
+        return;
+      }
+      res.status(502).json({
+        success: false,
+        configured: true,
+        error: `Failed to reach Google Places API: ${apiErr?.message || 'Network timeout'}`,
+      });
+    }
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message });
   }
@@ -432,7 +607,7 @@ app.get('/api/integrations', async (req, res) => {
     if (user) {
       if (companyId) {
         const company = await getCompanyById(companyId);
-        if (company && company.user_id !== user.id && user.role !== 'platform_admin') {
+        if (company && company.user_id !== user.id && !user.is_platform_admin) {
           res.status(403).json({ success: false, error: 'Access denied to this company integrations' });
           return;
         }
@@ -819,7 +994,7 @@ app.post('/api/integrations/save', async (req, res) => {
     }
 
     const company = await getCompanyById(targetCompanyId);
-    if (company && company.user_id !== user.id && user.role !== 'platform_admin') {
+    if (company && company.user_id !== user.id && !user.is_platform_admin) {
       res.status(403).json({ success: false, error: 'Access denied to manage integrations for this company' });
       return;
     }
@@ -882,7 +1057,7 @@ app.delete('/api/integrations/:provider', async (req, res) => {
     }
 
     const company = await getCompanyById(companyId);
-    if (company && company.user_id !== user.id && user.role !== 'platform_admin') {
+    if (company && company.user_id !== user.id && !user.is_platform_admin) {
       res.status(403).json({ success: false, error: 'Access denied to delete integrations for this company' });
       return;
     }
@@ -906,7 +1081,7 @@ app.get('/api/reviews', async (req, res) => {
       const userCompanies = await getUserCompanies(user.id);
       if (userCompanies.length > 0) {
         if (targetCompanyId) {
-          const authorized = userCompanies.some((c) => c.id === targetCompanyId) || user.role === 'platform_admin';
+          const authorized = userCompanies.some((c) => c.id === targetCompanyId) || user.is_platform_admin;
           if (!authorized) {
             res.status(403).json({ success: false, error: 'Access denied to this company reviews' });
             return;
@@ -940,7 +1115,7 @@ app.post('/api/reviews', validateBody(createReviewSchema), async (req, res) => {
       const userCompanies = await getUserCompanies(user.id);
       if (userCompanies.length > 0) {
         if (targetCompanyId) {
-          const authorized = userCompanies.some((c) => c.id === targetCompanyId) || user.role === 'platform_admin';
+          const authorized = userCompanies.some((c) => c.id === targetCompanyId) || user.is_platform_admin;
           if (!authorized) {
             targetCompanyId = userCompanies[0].id;
           }
@@ -989,7 +1164,7 @@ app.post(['/api/reviews/:id/reply', '/api/reviews/:id/replyText'], validateBody(
     const companyId = (req.body.companyId || req.body.company_id || req.query.companyId) as string | undefined;
     if (companyId) {
       const company = await getCompanyById(companyId);
-      if (company && company.user_id !== user.id && user.role !== 'platform_admin') {
+      if (company && company.user_id !== user.id && !user.is_platform_admin) {
         res.status(403).json({ success: false, error: 'Access denied to reply to this company review' });
         return;
       }
@@ -1020,7 +1195,7 @@ app.delete('/api/reviews/:id', async (req, res) => {
     const companyId = (req.query.companyId || req.query.company_id || req.body.companyId) as string | undefined;
     if (companyId) {
       const company = await getCompanyById(companyId);
-      if (company && company.user_id !== user.id && user.role !== 'platform_admin') {
+      if (company && company.user_id !== user.id && !user.is_platform_admin) {
         res.status(403).json({ success: false, error: 'Access denied to delete this company review' });
         return;
       }
@@ -1044,7 +1219,7 @@ app.get(['/api/content-posts', '/api/posts'], async (req, res) => {
       const userCompanies = await getUserCompanies(user.id);
       if (userCompanies.length > 0) {
         if (targetCompanyId) {
-          const authorized = userCompanies.some((c) => c.id === targetCompanyId) || user.role === 'platform_admin';
+          const authorized = userCompanies.some((c) => c.id === targetCompanyId) || user.is_platform_admin;
           if (!authorized) {
             res.status(403).json({ success: false, error: 'Access denied to this company content' });
             return;
@@ -1101,7 +1276,7 @@ app.post(['/api/content-posts', '/api/posts'], validateBody(createPostSchema), a
     const userCompanies = await getUserCompanies(user.id);
     if (userCompanies.length > 0) {
       if (targetCompanyId) {
-        const authorized = userCompanies.some((c) => c.id === targetCompanyId) || user.role === 'platform_admin';
+        const authorized = userCompanies.some((c) => c.id === targetCompanyId) || user.is_platform_admin;
         if (!authorized) {
           targetCompanyId = userCompanies[0].id;
         }
@@ -1157,7 +1332,7 @@ app.patch(['/api/content-posts/:id/status', '/api/posts/:id/status'], async (req
     const companyId = (req.body.companyId || req.body.company_id || req.query.companyId) as string | undefined;
     if (companyId) {
       const company = await getCompanyById(companyId);
-      if (company && company.user_id !== user.id && user.role !== 'platform_admin') {
+      if (company && company.user_id !== user.id && !user.is_platform_admin) {
         res.status(403).json({ success: false, error: 'Access denied to update this content post' });
         return;
       }
@@ -1182,7 +1357,7 @@ app.delete(['/api/content-posts/:id', '/api/posts/:id'], async (req, res) => {
     const companyId = (req.query.companyId || req.query.company_id || req.body.companyId) as string | undefined;
     if (companyId) {
       const company = await getCompanyById(companyId);
-      if (company && company.user_id !== user.id && user.role !== 'platform_admin') {
+      if (company && company.user_id !== user.id && !user.is_platform_admin) {
         res.status(403).json({ success: false, error: 'Access denied to delete this content post' });
         return;
       }
@@ -1358,7 +1533,7 @@ app.get('/api/leads', async (req, res) => {
         res.status(404).json({ success: false, error: 'Company not found' });
         return;
       }
-      if (company.user_id !== user.id && user.role !== 'platform_admin') {
+      if (company.user_id !== user.id && !user.is_platform_admin) {
         res.status(403).json({ success: false, error: 'Access denied to this company leads' });
         return;
       }
@@ -1369,7 +1544,7 @@ app.get('/api/leads', async (req, res) => {
 
     // If no companyId specified:
     // Only platform_admin can access all leads across all tenants
-    if (user.role === 'platform_admin') {
+    if (user.is_platform_admin) {
       const leads = await getAllLeads();
       res.json({ success: true, leads });
       return;
@@ -1403,7 +1578,7 @@ app.post('/api/leads', leadsRateLimiter, validateBody(createLeadSchema), async (
       const userCompanies = await getUserCompanies(authUser.id);
       if (userCompanies.length > 0) {
         if (targetCompanyId) {
-          const userOwnsCompany = userCompanies.some((c) => c.id === targetCompanyId) || authUser.role === 'platform_admin';
+          const userOwnsCompany = userCompanies.some((c) => c.id === targetCompanyId) || authUser.is_platform_admin;
           if (!userOwnsCompany) {
             // Re-bind to user's first company to prevent cross-tenant leakage
             targetCompanyId = userCompanies[0].id;
@@ -1467,11 +1642,11 @@ app.patch('/api/leads/:id/stage', validateBody(updateLeadStageSchema), async (re
     // Verify IDOR authorization
     if (lead.company_id) {
       const company = await getCompanyById(lead.company_id);
-      if (company && company.user_id !== user.id && user.role !== 'platform_admin') {
+      if (company && company.user_id !== user.id && !user.is_platform_admin) {
         res.status(403).json({ success: false, error: 'Access denied to update this lead' });
         return;
       }
-    } else if (user.role !== 'platform_admin') {
+    } else if (!user.is_platform_admin) {
       res.status(403).json({ success: false, error: 'Access denied to update global lead' });
       return;
     }
@@ -1804,21 +1979,63 @@ app.post('/api/razorpay/create-order', async (req, res) => {
 // Verify Razorpay Payment Signature
 app.post('/api/razorpay/verify-payment', validateBody(verifyRazorpayPaymentSchema), async (req, res) => {
   try {
+    // 1. Authentication check: Must have valid authenticated user session
+    const user = await getAuthUserFromRequest(req);
+    if (!user) {
+      res.status(401).json({ success: false, error: 'Authentication required to verify payments' });
+      return;
+    }
+
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, companyId, leadId, planName, amount } = req.body;
 
-    const creds = await resolveRazorpayCredentials(companyId);
+    // Verify company ownership or platform_admin authorization
+    let targetCompanyId = companyId;
+    let targetLead = null;
 
-    // CRITICAL SECURITY ENFORCEMENT:
-    // Never accept fake or unverified payments. Verification MUST fail if Razorpay credentials are not configured!
+    if (leadId) {
+      targetLead = await getLeadById(leadId);
+      if (!targetLead) {
+        res.status(404).json({ success: false, error: 'Lead not found' });
+        return;
+      }
+      if (targetLead.company_id) {
+        if (targetCompanyId && targetCompanyId !== targetLead.company_id) {
+          res.status(403).json({ success: false, error: 'Lead does not belong to specified company workspace' });
+          return;
+        }
+        targetCompanyId = targetLead.company_id;
+      }
+    }
+
+    if (targetCompanyId) {
+      const company = await getCompanyById(targetCompanyId);
+      if (company && company.user_id !== user.id && !user.is_platform_admin) {
+        res.status(403).json({ success: false, error: 'Access denied to this company workspace' });
+        return;
+      }
+    } else if (!user.is_platform_admin) {
+      // If non-admin user didn't specify company or lead, check if they own any company
+      const userCompanies = await getUserCompanies(user.id);
+      if (userCompanies.length > 0) {
+        targetCompanyId = userCompanies[0].id;
+      }
+    }
+
+    const creds = await resolveRazorpayCredentials(targetCompanyId);
+
+    // 2. Fallback when credentials are not configured:
+    // Never treat unverified claims as authentic payments. Do NOT update lead to 'won' and do NOT send Telegram alert.
     if (!creds.configured || !creds.keySecret) {
-      res.status(400).json({
-        success: false,
+      res.json({
+        success: true,
         verified: false,
-        error: 'Razorpay payment gateway credentials (Key ID and Secret) are not configured. Cannot verify payment without merchant credentials in Integrations settings.',
+        mode: 'sandbox_no_credentials',
+        message: 'No live Razorpay credentials configured for this company — payment was NOT verified as real.',
       });
       return;
     }
 
+    // 3. Constant-time HMAC-SHA256 signature verification
     const generatedSignature = crypto
       .createHmac('sha256', creds.keySecret)
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
@@ -1840,23 +2057,12 @@ app.post('/api/razorpay/verify-payment', validateBody(verifyRazorpayPaymentSchem
       return;
     }
 
-    // If tied to a lead, verify tenant matching and update status to 'won'
+    // 4. Genuine match: Update lead status to 'won' and send Telegram alert
     if (leadId) {
-      const lead = await getLeadById(leadId);
-      if (lead) {
-        if (companyId && lead.company_id && lead.company_id !== companyId) {
-          res.status(403).json({
-            success: false,
-            verified: false,
-            error: 'Lead does not belong to the specified company workspace',
-          });
-          return;
-        }
-        await updateLeadStatus(leadId, 'won');
-      }
+      await updateLeadStatus(leadId, 'won');
     }
 
-    // Dispatch verified payment alert to owner's Telegram
+    // Dispatch verified payment alert to Telegram
     const paymentMsg = `💰 *REAL PAYMENT CONFIRMED VIA RAZORPAY!*\n\n💳 *Payment ID:* \`${razorpay_payment_id}\`\n📦 *Order ID:* \`${razorpay_order_id}\`\n💵 *Amount:* ₹${amount || 'Paid'}\n📌 *Plan/Service:* ${planName || 'Digital Services'}\n\n✅ Cryptographic HMAC-SHA256 signature verified against Razorpay Key Secret.`;
     sendTelegramPushAlert(paymentMsg).catch(() => {});
 
@@ -2053,7 +2259,7 @@ async function startServer() {
       app.use(viteInstance.middlewares);
       console.log('[Server] Vite middleware mounted and ready.');
     } else {
-      const distPath = path.join(process.cwd(), 'dist');
+      const distPath = path.join(process.cwd(), 'dist', 'client');
       app.use(express.static(distPath));
       app.get('*', (req, res) => {
         res.sendFile(path.join(distPath, 'index.html'));
@@ -2062,6 +2268,8 @@ async function startServer() {
 
     const server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`Server running on http://localhost:${PORT}`);
+      // Start background automation scheduler (auto-publish, daily digest, review reminders)
+      startScheduler();
     });
 
     server.on('error', (err: any) => {
@@ -2080,6 +2288,9 @@ async function startServer() {
 
     const cleanup = async () => {
       console.log('[Server] Shutting down gracefully...');
+      try {
+        stopScheduler();
+      } catch {}
       if (viteInstance) {
         try {
           await viteInstance.close();

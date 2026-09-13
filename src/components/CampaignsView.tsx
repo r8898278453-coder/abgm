@@ -20,11 +20,28 @@ import { Campaign } from '../types';
 
 interface CampaignsViewProps {
   campaigns: Campaign[];
+  companyId?: string;
+  onUpdateCampaigns?: (campaigns: Campaign[]) => void;
+  onAddNewPost?: (post: any) => void;
+  onPublishPost?: (postId: string) => void;
+  onDeletePost?: (postId: string) => void;
 }
 
-export const CampaignsView: React.FC<CampaignsViewProps> = ({ campaigns: initialCampaignsData }) => {
+export const CampaignsView: React.FC<CampaignsViewProps> = ({
+  campaigns: initialCampaignsData,
+  companyId,
+  onUpdateCampaigns,
+  onAddNewPost,
+  onPublishPost,
+  onDeletePost,
+}) => {
   const [activeTab, setActiveTab] = useState<'campaigns' | 'roi'>('campaigns');
-  const [campaigns, setCampaigns] = useState<Campaign[]>(initialCampaignsData);
+  const [campaigns, setCampaigns] = useState<Campaign[]>(initialCampaignsData || []);
+  const [feedbackToast, setFeedbackToast] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    setCampaigns(initialCampaignsData || []);
+  }, [initialCampaignsData]);
 
   // New Campaign Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -69,8 +86,31 @@ export const CampaignsView: React.FC<CampaignsViewProps> = ({ campaigns: initial
       endDate: '2026-09-30',
     };
 
-    setCampaigns((prev) => [created, ...prev]);
+    const updated = [created, ...campaigns];
+    setCampaigns(updated);
+    onUpdateCampaigns?.(updated);
     setIsModalOpen(false);
+    setFeedbackToast('✓ Campaign launched & auto-synced to MySQL database!');
+    setTimeout(() => setFeedbackToast(null), 4000);
+  };
+
+  const handleToggleStatus = (campId: string) => {
+    const updated = campaigns.map((c) =>
+      c.id === campId ? { ...c, status: (c.status === 'active' ? 'paused' : 'active') as any } : c
+    );
+    setCampaigns(updated);
+    onUpdateCampaigns?.(updated);
+    setFeedbackToast('✓ Campaign status updated and synced to MySQL!');
+    setTimeout(() => setFeedbackToast(null), 3000);
+  };
+
+  const handleDeleteCampaign = (campId: string, name: string) => {
+    if (!window.confirm(`Delete campaign "${name}"?`)) return;
+    const updated = campaigns.filter((c) => c.id !== campId);
+    setCampaigns(updated);
+    onUpdateCampaigns?.(updated);
+    setFeedbackToast('✓ Campaign removed and synced to MySQL!');
+    setTimeout(() => setFeedbackToast(null), 3000);
   };
 
   return (
@@ -78,10 +118,16 @@ export const CampaignsView: React.FC<CampaignsViewProps> = ({ campaigns: initial
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-black text-slate-900 flex items-center gap-2">
-            <Layers className="w-7 h-7 text-indigo-600" />
-            Campaign Manager & Attribution ROI
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-black text-slate-900 flex items-center gap-2">
+              <Layers className="w-7 h-7 text-indigo-600" />
+              Campaign Manager & Attribution ROI
+            </h1>
+            <span className="hidden md:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
+              <Sparkles className="w-3 h-3 text-emerald-600" />
+              MySQL Synced
+            </span>
+          </div>
           <p className="text-slate-500 text-xs sm:text-sm mt-0.5">
             Multi-touch channel tracking connecting Google, Meta & WhatsApp spend directly to real customer revenue.
           </p>
@@ -107,6 +153,22 @@ export const CampaignsView: React.FC<CampaignsViewProps> = ({ campaigns: initial
           </button>
         </div>
       </div>
+
+      {/* Feedback Banner */}
+      {feedbackToast && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 px-4 py-3 rounded-2xl flex items-center justify-between text-xs font-bold animate-in fade-in shadow-xs">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+            <span>{feedbackToast}</span>
+          </div>
+          <button
+            onClick={() => setFeedbackToast(null)}
+            className="text-emerald-700 hover:text-emerald-950 font-black px-2 py-0.5 rounded-md hover:bg-emerald-100"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* ROI & Financial Metrics Top Bar Bento Grid */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
@@ -178,15 +240,41 @@ export const CampaignsView: React.FC<CampaignsViewProps> = ({ campaigns: initial
                 key={camp.id}
                 className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-4"
               >
-                <div className="flex items-start justify-between">
+                <div className="flex items-start justify-between gap-2">
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-base text-slate-900">{camp.name}</span>
-                      <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase">
+                      <span
+                        className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${
+                          camp.status === 'active'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-amber-100 text-amber-800'
+                        }`}
+                      >
                         {camp.status}
                       </span>
                     </div>
                     <p className="text-xs text-slate-500 mt-1">{camp.objective}</p>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <button
+                      onClick={() => handleToggleStatus(camp.id)}
+                      className={`text-[11px] font-bold px-2.5 py-1 rounded-xl border transition ${
+                        camp.status === 'active'
+                          ? 'bg-slate-50 hover:bg-slate-100 text-slate-600 border-slate-200'
+                          : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200'
+                      }`}
+                      title={camp.status === 'active' ? 'Pause campaign' : 'Resume campaign'}
+                    >
+                      {camp.status === 'active' ? 'Pause' : 'Activate'}
+                    </button>
+                    <button
+                      onClick={() => handleDeleteCampaign(camp.id, camp.name)}
+                      className="p-1.5 text-slate-400 hover:text-rose-600 rounded-xl hover:bg-rose-50 transition"
+                      title="Delete campaign"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
 

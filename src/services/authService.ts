@@ -1,4 +1,5 @@
 import { AuthUser, CompanyRecord, LeadItem, ReviewItem, ContentPost } from '../types';
+import { API_BASE_URL } from '../config/apiConfig';
 
 const TOKEN_KEY = 'abga_auth_token';
 const USER_KEY = 'abga_user_profile';
@@ -68,7 +69,9 @@ export async function apiRequest<T>(url: string, options: RequestInit = {}): Pro
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const response = await fetch(url, {
+  const resolvedUrl = url.startsWith('/') ? `${API_BASE_URL}${url}` : url;
+
+  const response = await fetch(resolvedUrl, {
     ...options,
     headers,
   });
@@ -540,6 +543,71 @@ export async function getRazorpayStatusApi(companyId?: string): Promise<{
     return { configured: false, isLive: false, mode: 'UNCONFIGURED' };
   }
 }
+
+export interface TelegramNotifyResult {
+  success: boolean;
+  error?: string;
+}
+
+export async function sendTelegramNotifyApi(message: string): Promise<TelegramNotifyResult> {
+  try {
+    const res = await apiRequest<TelegramNotifyResult>('/api/telegram/notify', {
+      method: 'POST',
+      body: JSON.stringify({ message }),
+    });
+    return res;
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || 'Failed to dispatch Telegram alert',
+    };
+  }
+}
+
+export interface GoogleProfileData {
+  place_id: string;
+  name?: string;
+  rating?: number | null;
+  user_ratings_total?: number;
+  formatted_phone_number?: string | null;
+  formatted_address?: string | null;
+  website?: string | null;
+  url?: string | null;
+  opening_hours?: {
+    open_now?: boolean;
+    weekday_text: string[];
+    periods?: any[];
+  } | null;
+  business_status?: string;
+  photos_count?: number;
+  photos?: Array<{ photo_reference: string; width: number; height: number }>;
+  reviews?: Array<{
+    author_name: string;
+    author_url?: string;
+    profile_photo_url?: string;
+    rating: number;
+    text: string;
+    relative_time_description?: string;
+    time?: number;
+  }>;
+}
+
+export interface GoogleProfileResponse {
+  success: boolean;
+  configured: boolean;
+  cached?: boolean;
+  cachedAt?: string;
+  warning?: string;
+  error?: string;
+  message?: string;
+  data?: GoogleProfileData;
+}
+
+export async function getGoogleProfileApi(companyId: string, refresh = false): Promise<GoogleProfileResponse> {
+  const query = refresh ? '?refresh=true' : '';
+  return apiRequest<GoogleProfileResponse>(`/api/companies/${encodeURIComponent(companyId)}/google-profile${query}`);
+}
+
 
 
 

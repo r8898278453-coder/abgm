@@ -27,6 +27,7 @@ import {
   createPaymentLinkApi,
   WhatsAppSendResult,
 } from '../services/authService';
+import { API_BASE_URL } from '../config/apiConfig';
 
 interface RequiredField {
   key: string;
@@ -94,7 +95,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
   const fetchIntegrations = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetch(`/api/integrations?companyId=${encodeURIComponent(companyId)}`);
+      const res = await fetch(`${API_BASE_URL}/api/integrations?companyId=${encodeURIComponent(companyId)}`);
       const data = await res.json();
       if (data.success && Array.isArray(data.integrations)) {
         setIntegrations(data.integrations);
@@ -136,7 +137,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
     setTestingConnection(true);
     setTestResult(null);
     try {
-      const res = await fetch('/api/integrations/test', {
+      const res = await fetch(`${API_BASE_URL}/api/integrations/test`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -172,7 +173,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
 
     setSavingConnection(true);
     try {
-      const res = await fetch('/api/integrations/save', {
+      const res = await fetch(`${API_BASE_URL}/api/integrations/save`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -209,7 +210,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
 
     try {
       setSyncingId(providerId);
-      const res = await fetch(`/api/integrations/${providerId}?companyId=${encodeURIComponent(companyId)}`, {
+      const res = await fetch(`${API_BASE_URL}/api/integrations/${providerId}?companyId=${encodeURIComponent(companyId)}`, {
         method: 'DELETE',
       });
       const data = await res.json();

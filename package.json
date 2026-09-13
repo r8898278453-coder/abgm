@@ -11,7 +11,7 @@
     "lint": "tsc --noEmit",
     "cap:sync": "cap sync",
     "cap:android": "cap open android",
-    "build:mobile": "vite build && cap sync"
+    "build:mobile": "cross-env VITE_API_BASE_URL=https://bga.aaditechs.in vite build && cap sync"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.1",
@@ -25,6 +25,7 @@
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "mysql2": "^3.24.3",
+    "node-cron": "^4.6.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "vite": "^6.2.3",
@@ -35,7 +36,9 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
+    "@types/node-cron": "^3.0.11",
     "autoprefixer": "^10.4.21",
+    "cross-env": "^10.1.0",
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",

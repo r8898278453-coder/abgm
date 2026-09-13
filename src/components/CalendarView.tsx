@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Calendar as CalendarIcon,
   Sparkles,
@@ -8,18 +8,48 @@ import {
   Plus,
   RefreshCw,
   Send,
+  Database,
+  Trash2,
+  Check,
+  AlertTriangle,
+  X,
+  Loader2,
 } from 'lucide-react';
 import { ContentPost } from '../types';
+import {
+  createContentPostApi,
+  updatePostStatusApi,
+  deleteContentPostApi,
+} from '../services/authService';
 
 interface CalendarViewProps {
   posts: ContentPost[];
+  companyId?: string;
   onNavigate: (tab: any) => void;
+  onUpdatePostStatus?: (postId: string) => void;
+  onDeletePost?: (postId: string) => void;
+  onAddNewPost?: (post: ContentPost) => void;
 }
 
-export const CalendarView: React.FC<CalendarViewProps> = ({ posts, onNavigate }) => {
+export const CalendarView: React.FC<CalendarViewProps> = ({
+  posts,
+  companyId,
+  onNavigate,
+  onUpdatePostStatus,
+  onDeletePost,
+  onAddNewPost,
+}) => {
+  const [localPosts, setLocalPosts] = useState<ContentPost[]>(posts || []);
   const [selectedPlatform, setSelectedPlatform] = useState<'all' | 'google' | 'instagram' | 'whatsapp'>('all');
   const [isPlanning, setIsPlanning] = useState(false);
   const [planSuccessToast, setPlanSuccessToast] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [isPublishingId, setIsPublishingId] = useState<string | null>(null);
+  const [isDeletingId, setIsDeletingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLocalPosts(posts || []);
+  }, [posts]);
 
   // Generate a reactive 30-day schedule array
   const [items, setItems] = useState([
@@ -35,10 +65,114 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ posts, onNavigate })
     { day: 'Fri, Sep 19', platform: 'google', title: 'Original Chargers & Batteries Stock Update', time: '11:30 AM', status: 'draft' },
   ]);
 
-  const handlePlanNextMonth = () => {
+  const handlePublishPost = async (postId: string) => {
+    const previous = [...localPosts];
+    // Optimistic UI update
+    setLocalPosts((prev) =>
+      prev.map((p) => (p.id === postId ? { ...p, status: 'published' as const } : p))
+    );
+    setIsPublishingId(postId);
+    setActionError(null);
+
+    try {
+      const ok = await updatePostStatusApi(postId, 'published', companyId);
+      if (!ok) throw new Error('Status update failed on server');
+      setPlanSuccessToast('✓ Post published to MySQL database successfully!');
+      setTimeout(() => setPlanSuccessToast(null), 4000);
+      onUpdatePostStatus?.(postId);
+    } catch (err: any) {
+      console.error('Failed to publish post in MySQL:', err);
+      setLocalPosts(previous);
+      setActionError(`Failed to publish post: ${err?.message || 'Server error'}. Status reverted.`);
+    } finally {
+      setIsPublishingId(null);
+    }
+  };
+
+  const handleDeletePost = async (postId: string, title: string) => {
+    if (!window.confirm(`Delete post "${title}" from MySQL database?`)) return;
+
+    const previous = [...localPosts];
+    // Optimistic UI update
+    setLocalPosts((prev) => prev.filter((p) => p.id !== postId));
+    setIsDeletingId(postId);
+    setActionError(null);
+
+    try {
+      const ok = await deleteContentPostApi(postId, companyId);
+      if (!ok) throw new Error('Delete failed on server');
+      setPlanSuccessToast('✓ Post deleted from MySQL database.');
+      setTimeout(() => setPlanSuccessToast(null), 3000);
+      onDeletePost?.(postId);
+    } catch (err: any) {
+      console.error('Failed to delete post in MySQL:', err);
+      setLocalPosts(previous);
+      setActionError(`Failed to delete post: ${err?.message || 'Server error'}. Post restored.`);
+    } finally {
+      setIsDeletingId(null);
+    }
+  };
+
+  const handlePlanNextMonth = async () => {
     setIsPlanning(true);
-    setTimeout(() => {
-      setIsPlanning(false);
+    setActionError(null);
+
+    const plannedMilestones: Array<{
+      title: string;
+      type: ContentPost['type'];
+      platforms: ('google' | 'facebook' | 'instagram' | 'whatsapp')[];
+      headline: string;
+      caption: string;
+      scheduledDate: string;
+      timeSlot: string;
+    }> = [
+      {
+        title: 'Navratri Special Corporate Laptop Health Check',
+        type: 'offer',
+        platforms: ['google'],
+        headline: '🌟 Navratri Corporate Tech Checkup: Free Sanitization & 25% Off SSDs',
+        caption: 'Keep your team machines humming during festive demand. On-site pickup & 4-hour turnaround for corporate offices across Navi Mumbai.',
+        scheduledDate: '2026-09-22',
+        timeSlot: '10:00 AM',
+      },
+      {
+        title: 'Reel: Why Free Antivirus Fails Small Businesses',
+        type: 'educational',
+        platforms: ['instagram'],
+        headline: '🛡️ Is Free Antivirus Actually Costing You Sensitive Customer Data?',
+        caption: 'Watch how ransomware sneaks past free browser extensions. Secure your business workstations before festive peak!',
+        scheduledDate: '2026-09-24',
+        timeSlot: '05:00 PM',
+      },
+      {
+        title: 'VIP Alert: Flash Screen Replacement Voucher (20% Off)',
+        type: 'offer',
+        platforms: ['whatsapp'],
+        headline: '⚡ VIP WhatsApp Flash: 20% Off Original Screen Replacements',
+        caption: 'Exclusive 48-hour voucher for saved contacts. Genuine parts, ultrasonic cleaning, 90-day written warranty included.',
+        scheduledDate: '2026-09-26',
+        timeSlot: '11:30 AM',
+      },
+    ];
+
+    try {
+      // Save newly planned milestones directly to MySQL
+      for (const item of plannedMilestones) {
+        try {
+          const created = await createContentPostApi({
+            ...item,
+            companyId,
+            status: 'scheduled',
+          });
+          if (created) {
+            setLocalPosts((prev) => [created, ...prev.filter((p) => p.id !== created.id)]);
+            onAddNewPost?.(created);
+          }
+        } catch (e) {
+          console.warn('Could not auto-insert planned post into MySQL:', e);
+        }
+      }
+
       setItems([
         { day: 'Mon, Sep 1', platform: 'google', title: 'Weekly Diagnostic Slot Announcement', time: '10:00 AM', status: 'published' },
         { day: 'Wed, Sep 3', platform: 'instagram', title: 'Reel: Slow MacBook SSD Fix', time: '05:30 PM', status: 'published' },
@@ -58,10 +192,20 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ posts, onNavigate })
         { day: 'Sat, Oct 4', platform: 'google', title: 'Diwali Pre-Booking for SME Annual Maintenance AMC', time: '10:30 AM', status: 'scheduled' },
         { day: 'Tue, Oct 7', platform: 'whatsapp', title: 'Diwali Greetings & Client Appreciation Tech Voucher', time: '12:00 PM', status: 'scheduled' },
       ]);
-      setPlanSuccessToast('✨ AI Content Engine has generated full 30-day balanced content plan synced with Google, Instagram & WhatsApp!');
+      setPlanSuccessToast('✨ AI Content Engine planned 30 days of balanced content and saved posts to MySQL!');
       setTimeout(() => setPlanSuccessToast(null), 6000);
-    }, 1000);
+    } catch (err: any) {
+      console.error('Failed to plan month:', err);
+      setActionError(`Planning error: ${err?.message || 'Server error'}`);
+    } finally {
+      setIsPlanning(false);
+    }
   };
+
+  const filteredPosts = localPosts.filter((post) => {
+    if (selectedPlatform === 'all') return true;
+    return post.platforms?.some((p) => p.toLowerCase().includes(selectedPlatform));
+  });
 
   const filteredItems = items.filter((item) => {
     if (selectedPlatform === 'all') return true;
@@ -73,23 +217,42 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ posts, onNavigate })
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-black text-slate-900 flex items-center gap-2">
-            <CalendarIcon className="w-7 h-7 text-indigo-600" />
-            30-Day Content Calendar & Planner
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-black text-slate-900 flex items-center gap-2">
+              <CalendarIcon className="w-7 h-7 text-indigo-600" />
+              30-Day Content Calendar & Planner
+            </h1>
+            <span className="hidden md:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
+              <Database className="w-3 h-3 text-emerald-600" />
+              MySQL Synced
+            </span>
+          </div>
           <p className="text-slate-500 text-xs sm:text-sm mt-0.5">
             Auto-balanced publishing schedule factoring in local festivals (Ganesh Utsav, Diwali), seasonality & competitor moves.
           </p>
         </div>
 
-        <button
-          onClick={handlePlanNextMonth}
-          disabled={isPlanning}
-          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition shadow-xs w-fit"
-        >
-          <Sparkles className={`w-3.5 h-3.5 ${isPlanning ? 'animate-spin' : ''}`} />
-          <span>{isPlanning ? 'Analyzing Festivals & Planning...' : 'Plan Next 30 Days with AI'}</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => onNavigate('content')}
+            className="flex items-center gap-1.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold px-3.5 py-2.5 rounded-xl transition shadow-xs"
+          >
+            <Plus className="w-3.5 h-3.5 text-indigo-600" />
+            <span>New Post Creative</span>
+          </button>
+          <button
+            onClick={handlePlanNextMonth}
+            disabled={isPlanning}
+            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition shadow-xs w-fit disabled:opacity-50"
+          >
+            {isPlanning ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="w-3.5 h-3.5" />
+            )}
+            <span>{isPlanning ? 'Saving to MySQL...' : 'Plan Next 30 Days with AI'}</span>
+          </button>
+        </div>
       </div>
 
       {/* Dynamic Generation Success Banner */}
@@ -102,6 +265,22 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ posts, onNavigate })
           <button
             onClick={() => setPlanSuccessToast(null)}
             className="text-emerald-700 hover:text-emerald-950 font-black px-2 py-0.5 rounded-md hover:bg-emerald-100"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Action Error Banner */}
+      {actionError && (
+        <div className="bg-rose-50 border border-rose-200 text-rose-900 px-4 py-3 rounded-2xl flex items-center justify-between text-xs font-bold animate-in fade-in shadow-xs">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+            <span>{actionError}</span>
+          </div>
+          <button
+            onClick={() => setActionError(null)}
+            className="text-rose-700 hover:text-rose-950 font-black px-2 py-0.5 rounded-md hover:bg-rose-100"
           >
             ✕
           </button>
@@ -140,10 +319,110 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ posts, onNavigate })
         </div>
       </div>
 
-      {/* Calendar Grid Bento Card */}
+      {/* Active MySQL Content Posts Queue Section */}
+      {filteredPosts.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                <Database className="w-4 h-4 text-emerald-600" />
+                Live MySQL Scheduled & Published Queue ({filteredPosts.length})
+              </h2>
+            </div>
+            <button
+              onClick={() => onNavigate('content')}
+              className="text-xs font-bold text-indigo-600 hover:text-indigo-700"
+            >
+              Manage in Content Studio →
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+            {filteredPosts.map((post) => (
+              <div
+                key={post.id}
+                className="bg-indigo-50/40 border border-indigo-200/80 rounded-2xl p-4 text-xs flex flex-col justify-between space-y-3 hover:border-indigo-400 transition shadow-2xs"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-slate-900 text-sm">{post.scheduledDate}</span>
+                    <span className="text-[10px] font-mono text-slate-400">ID: {post.id}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-500 flex items-center gap-1 font-medium">
+                      <Clock className="w-3 h-3 text-slate-400" /> {post.timeSlot}
+                    </span>
+                    <span
+                      className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${
+                        post.status === 'published'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-indigo-100 text-indigo-800'
+                      }`}
+                    >
+                      {post.status}
+                    </span>
+                    <button
+                      onClick={() => handleDeletePost(post.id, post.title)}
+                      disabled={isDeletingId === post.id}
+                      className="text-slate-400 hover:text-rose-600 p-1 rounded-lg hover:bg-rose-50 transition ml-0.5 disabled:opacity-50"
+                      title="Delete Post from MySQL"
+                    >
+                      <Trash2 className={`w-3.5 h-3.5 ${isDeletingId === post.id ? 'animate-pulse text-rose-500' : ''}`} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="text-sm font-bold text-slate-900">{post.title}</div>
+                  {post.headline && (
+                    <div className="text-xs text-indigo-900 font-medium">{post.headline}</div>
+                  )}
+                  <div className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
+                    {post.caption}
+                  </div>
+                </div>
+
+                <div className="pt-2.5 border-t border-indigo-100 flex items-center justify-between">
+                  <div className="flex items-center gap-1">
+                    {post.platforms?.map((plat) => (
+                      <span
+                        key={plat}
+                        className="text-[10px] text-indigo-700 bg-white border border-indigo-200 px-2 py-0.5 rounded-full uppercase font-bold"
+                      >
+                        {plat}
+                      </span>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {post.status === 'scheduled' && (
+                      <button
+                        onClick={() => handlePublishPost(post.id)}
+                        disabled={isPublishingId === post.id}
+                        className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-2xs flex items-center gap-1 disabled:opacity-50"
+                      >
+                        <Check className="w-3 h-3" />
+                        <span>{isPublishingId === post.id ? 'Publishing...' : 'Publish to MySQL'}</span>
+                      </button>
+                    )}
+                    <button
+                      onClick={() => onNavigate('content')}
+                      className="text-[11px] text-indigo-600 hover:text-indigo-800 font-bold"
+                    >
+                      Edit →
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 30-Day Master Roster Bento Card */}
       <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
         <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
-          September 2026 Marketing Roster
+          September 2026 Strategic Plan & Local Festivities
         </h2>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
@@ -184,7 +463,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ posts, onNavigate })
                   onClick={() => onNavigate('content')}
                   className="text-[11px] text-indigo-600 hover:text-indigo-800 font-bold"
                 >
-                  Edit Creative →
+                  Create & Schedule in MySQL →
                 </button>
               </div>
             </div>

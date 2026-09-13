@@ -22,6 +22,7 @@ import { LeadItem } from '../types';
 import {
   apiRequest,
   sendWhatsAppMessageApi,
+  getWhatsAppStatusApi,
   createPaymentLinkApi,
 } from '../services/authService';
 
@@ -38,10 +39,20 @@ export const LeadsCrmView: React.FC<LeadsCrmViewProps> = ({
   onLeadAdded,
   companyId,
 }) => {
-  const [selectedLead, setSelectedLead] = useState<LeadItem>(leads[0]);
+  const [selectedLead, setSelectedLead] = useState<LeadItem | undefined>(leads[0]);
   const [replyDraft, setReplyDraft] = useState(leads[0]?.aiSuggestedReply || '');
   const [filterStage, setFilterStage] = useState<string>('all');
   const [dispatchNotice, setDispatchNotice] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if ((!selectedLead || !leads.some((l) => l.id === selectedLead.id)) && leads.length > 0) {
+      setSelectedLead(leads[0]);
+      setReplyDraft(leads[0]?.aiSuggestedReply || '');
+    } else if (leads.length === 0) {
+      setSelectedLead(undefined);
+      setReplyDraft('');
+    }
+  }, [leads]);
 
   const [isAddLeadModalOpen, setIsAddLeadModalOpen] = useState(false);
   const [newLeadName, setNewLeadName] = useState('');
@@ -190,6 +201,35 @@ export const LeadsCrmView: React.FC<LeadsCrmViewProps> = ({
         setNewLeadService('');
         setNewLeadBudget('');
         setDispatchNotice(`✓ New lead successfully recorded in Database & notified on Telegram!`);
+
+        // Check if WhatsApp integration is active for this company and auto-dispatch suggested reply
+        const leadPhone = data.lead.phone;
+        const suggestedReply = data.lead.ai_suggested_reply || data.lead.aiSuggestedReply;
+        if (leadPhone && suggestedReply) {
+          getWhatsAppStatusApi(companyId)
+            .then(async (status) => {
+              if (status?.configured) {
+                const waRes = await sendWhatsAppMessageApi({
+                  to: leadPhone,
+                  message: suggestedReply,
+                  companyId,
+                });
+                if (waRes?.success) {
+                  onUpdateLeadStage(data.lead.id, 'contacted');
+                  apiRequest(`/api/leads/${data.lead.id}/stage`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ stage: 'contacted' }),
+                  }).catch(() => {});
+                  setDispatchNotice(
+                    `✓ Lead recorded, notified on Telegram, & automated WhatsApp reply dispatched to ${leadPhone}!`
+                  );
+                }
+              }
+            })
+            .catch(() => {
+              // Skip silently if WhatsApp check or send fails
+            });
+        }
       }
     } catch {
       setDispatchNotice(`✓ Lead logged into active pipeline.`);

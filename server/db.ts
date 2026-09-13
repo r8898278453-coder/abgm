@@ -8,6 +8,7 @@ export interface DbUser {
   salt: string;
   full_name: string;
   role: 'platform_admin' | 'owner' | 'manager' | 'agency';
+  is_platform_admin: boolean;
   created_at?: string;
 }
 
@@ -106,6 +107,13 @@ export interface DbIntegration {
   last_error?: string | null;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface DbGoogleProfileCache {
+  company_id: string;
+  place_id: string;
+  data: any;
+  cached_at: string;
 }
 
 let pool: mysql.Pool | null = null;
@@ -212,6 +220,7 @@ function getInitialEnvAdmin(): DbUser[] {
       salt,
       full_name: process.env.INITIAL_ADMIN_NAME?.trim() || 'System Administrator',
       role: 'platform_admin',
+      is_platform_admin: true,
       created_at: new Date().toISOString(),
     }];
   }
@@ -455,9 +464,31 @@ async function autoInitializeTables(dbPool: mysql.Pool) {
           salt VARCHAR(64) NOT NULL,
           full_name VARCHAR(128) NOT NULL,
           role VARCHAR(32) DEFAULT 'owner',
+          is_platform_admin TINYINT(1) NOT NULL DEFAULT 0,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
       `);
+
+      // Ensure is_platform_admin column exists if table was created in an earlier schema
+      try {
+        const [adminCol]: any = await connection.query(`
+          SELECT COLUMN_NAME
+          FROM INFORMATION_SCHEMA.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME = 'users'
+            AND COLUMN_NAME = 'is_platform_admin'
+        `);
+        if (!adminCol || adminCol.length === 0) {
+          console.log('[Hostinger MySQL] Self-healing schema: Adding missing is_platform_admin column to users table...');
+          await connection.query(`
+            ALTER TABLE users
+            ADD COLUMN is_platform_admin TINYINT(1) NOT NULL DEFAULT 0 AFTER role
+          `);
+          console.log('[Hostinger MySQL] Self-healing complete: is_platform_admin column added to users.');
+        }
+      } catch (colErr: any) {
+        console.warn('[Hostinger MySQL] is_platform_admin column check notice:', colErr?.message);
+      }
 
       // Optional: Seed initial admin in MySQL if explicitly configured in environment variables
       const envAdminEmail = process.env.INITIAL_ADMIN_EMAIL?.trim().toLowerCase();
@@ -469,10 +500,13 @@ async function autoInitializeTables(dbPool: mysql.Pool) {
           const adminId = `usr_${crypto.randomUUID().replace(/-/g, '')}`;
           const adminName = process.env.INITIAL_ADMIN_NAME?.trim() || 'System Administrator';
           await connection.query(`
-            INSERT INTO users (id, email, password_hash, salt, full_name, role)
-            VALUES (?, ?, ?, ?, ?, 'platform_admin')
+            INSERT INTO users (id, email, password_hash, salt, full_name, role, is_platform_admin)
+            VALUES (?, ?, ?, ?, ?, 'platform_admin', 1)
           `, [adminId, envAdminEmail, adminHash, adminSalt, adminName]);
-          console.log(`[Hostinger MySQL] Initial administrator provisioned for: ${envAdminEmail}`);
+          console.log(`[Hostinger MySQL] Initial administrator provisioned for: ${envAdminEmail} (is_platform_admin = 1)`);
+        } else {
+          // Ensure existing bootstrapped INITIAL_ADMIN has is_platform_admin = 1
+          await connection.query('UPDATE users SET is_platform_admin = 1 WHERE email = ?', [envAdminEmail]);
         }
       }
 
@@ -696,6 +730,18 @@ async function autoInitializeTables(dbPool: mysql.Pool) {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
       `);
 
+      // 10. Google Business Profile & Places API Cache table (Short TTL to prevent redundant Places API costs)
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS google_profile_cache (
+          company_id VARCHAR(64) PRIMARY KEY,
+          place_id VARCHAR(128) NOT NULL,
+          data_payload LONGTEXT NOT NULL,
+          cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          INDEX idx_gpc_comp (company_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+      `);
+
       console.log('[Hostinger MySQL] Relational Multi-Tenant Tables verified & ready!');
     } finally {
       connection.release();
@@ -714,7 +760,11 @@ export async function findUserByEmail(email: string): Promise<DbUser | null> {
     if (db) {
       const [rows]: any = await db.query('SELECT * FROM users WHERE email = ? LIMIT 1', [cleanEmail]);
       if (rows && rows.length > 0) {
-        return rows[0] as DbUser;
+        const u = rows[0];
+        return {
+          ...u,
+          is_platform_admin: Boolean(u.is_platform_admin),
+        } as DbUser;
       }
       return null;
     }
@@ -722,7 +772,8 @@ export async function findUserByEmail(email: string): Promise<DbUser | null> {
     console.warn('[findUserByEmail] MySQL error:', err?.message);
   }
 
-  return inMemoryUsers.find((u) => u.email.toLowerCase() === cleanEmail) || null;
+  const memUser = inMemoryUsers.find((u) => u.email.toLowerCase() === cleanEmail);
+  return memUser ? { ...memUser, is_platform_admin: Boolean(memUser.is_platform_admin) } : null;
 }
 
 export async function findUserById(id: string): Promise<DbUser | null> {
@@ -731,7 +782,11 @@ export async function findUserById(id: string): Promise<DbUser | null> {
     if (db) {
       const [rows]: any = await db.query('SELECT * FROM users WHERE id = ? LIMIT 1', [id]);
       if (rows && rows.length > 0) {
-        return rows[0] as DbUser;
+        const u = rows[0];
+        return {
+          ...u,
+          is_platform_admin: Boolean(u.is_platform_admin),
+        } as DbUser;
       }
       return null;
     }
@@ -739,7 +794,8 @@ export async function findUserById(id: string): Promise<DbUser | null> {
     console.warn('[findUserById] MySQL error:', err?.message);
   }
 
-  return inMemoryUsers.find((u) => u.id === id) || null;
+  const memUser = inMemoryUsers.find((u) => u.id === id);
+  return memUser ? { ...memUser, is_platform_admin: Boolean(memUser.is_platform_admin) } : null;
 }
 
 export async function createUser(data: {
@@ -759,6 +815,7 @@ export async function createUser(data: {
     salt,
     full_name: data.full_name.trim(),
     role: safeRole,
+    is_platform_admin: false, // Never settable via public registration
     created_at: new Date().toISOString(),
   };
 
@@ -766,7 +823,7 @@ export async function createUser(data: {
     const db = await getDbPool();
     if (db) {
       await db.query(
-        'INSERT INTO users (id, email, password_hash, salt, full_name, role) VALUES (?, ?, ?, ?, ?, ?)',
+        'INSERT INTO users (id, email, password_hash, salt, full_name, role, is_platform_admin) VALUES (?, ?, ?, ?, ?, ?, 0)',
         [newUser.id, newUser.email, newUser.password_hash, newUser.salt, newUser.full_name, newUser.role]
       );
       return newUser;
@@ -1222,6 +1279,70 @@ export async function deleteCompanyIntegration(companyId: string, provider: stri
   return false;
 }
 
+// ---------------- GOOGLE PROFILE & PLACES DATA CACHE ---------------- //
+
+const inMemoryGoogleProfileCache = new Map<
+  string,
+  { company_id: string; place_id: string; data: any; cached_at: string }
+>();
+
+export async function getGoogleProfileCache(companyId: string): Promise<DbGoogleProfileCache | null> {
+  try {
+    const db = await getDbPool();
+    if (db) {
+      const [rows]: any = await db.query(
+        'SELECT company_id, place_id, data_payload, cached_at FROM google_profile_cache WHERE company_id = ? LIMIT 1',
+        [companyId]
+      );
+      if (rows && rows.length > 0) {
+        const r = rows[0];
+        return {
+          company_id: r.company_id,
+          place_id: r.place_id,
+          data: typeof r.data_payload === 'string' ? JSON.parse(r.data_payload) : r.data_payload,
+          cached_at: r.cached_at instanceof Date ? r.cached_at.toISOString() : String(r.cached_at),
+        };
+      }
+      return null;
+    }
+  } catch (err: any) {
+    console.warn('[getGoogleProfileCache] MySQL error:', err?.message);
+  }
+  return inMemoryGoogleProfileCache.get(companyId) || null;
+}
+
+export async function saveGoogleProfileCache(
+  companyId: string,
+  placeId: string,
+  data: any
+): Promise<boolean> {
+  const jsonPayload = JSON.stringify(data);
+  const now = new Date().toISOString();
+  try {
+    const db = await getDbPool();
+    if (db) {
+      await db.query(
+        `INSERT INTO google_profile_cache (company_id, place_id, data_payload, cached_at)
+         VALUES (?, ?, ?, NOW())
+         ON DUPLICATE KEY UPDATE
+           place_id = VALUES(place_id),
+           data_payload = VALUES(data_payload),
+           cached_at = NOW()`,
+        [companyId, placeId, jsonPayload]
+      );
+    }
+  } catch (err: any) {
+    console.warn('[saveGoogleProfileCache] MySQL error:', err?.message);
+  }
+  inMemoryGoogleProfileCache.set(companyId, {
+    company_id: companyId,
+    place_id: placeId,
+    data,
+    cached_at: now,
+  });
+  return true;
+}
+
 // ---------------- REVIEWS MANAGEMENT (PER-TENANT MYSQL PERSISTENCE) ---------------- //
 
 export async function getCompanyReviews(companyId?: string): Promise<DbReview[]> {
@@ -1575,7 +1696,60 @@ export async function createContentPost(post: Omit<DbContentPost, 'id'> & { id?:
   return newPost;
 }
 
+export async function getAllScheduledPosts(): Promise<DbContentPost[]> {
+  try {
+    const db = await getDbPool();
+    if (db) {
+      const [rows]: any = await db.query("SELECT * FROM content_posts WHERE status = 'scheduled' ORDER BY created_at ASC");
+      if (rows && Array.isArray(rows)) {
+        return rows.map((r: any) => {
+          let platforms: string[] = ['google'];
+          if (r.platforms) {
+            try {
+              platforms = typeof r.platforms === 'string' ? JSON.parse(r.platforms) : r.platforms;
+            } catch {
+              platforms = String(r.platforms).split(',').map((s: string) => s.trim());
+            }
+          }
+          let hashtags: string[] = [];
+          if (r.hashtags) {
+            try {
+              hashtags = typeof r.hashtags === 'string' ? JSON.parse(r.hashtags) : r.hashtags;
+            } catch {
+              hashtags = String(r.hashtags).split(',').map((s: string) => s.trim());
+            }
+          }
+          return {
+            id: r.id,
+            company_id: r.company_id,
+            title: r.title,
+            type: r.type,
+            platforms,
+            channel: r.channel,
+            headline: r.headline,
+            caption: r.caption,
+            cta: r.cta,
+            image_url: r.image_url,
+            status: r.status,
+            scheduled_date: r.scheduled_date,
+            scheduled_time: r.scheduled_time,
+            time_slot: r.time_slot,
+            hashtags,
+            reel_script: r.reel_script ? (typeof r.reel_script === 'string' ? JSON.parse(r.reel_script) : r.reel_script) : undefined,
+            created_at: r.created_at,
+          };
+        });
+      }
+    }
+  } catch (err: any) {
+    console.warn('[getAllScheduledPosts] MySQL error, fallback to memory:', err?.message);
+  }
+
+  return inMemoryContentPosts.filter((p) => p.status === 'scheduled');
+}
+
 export async function updateContentPostStatus(postId: string, status: DbContentPost['status'], companyId?: string): Promise<boolean> {
+  let dbSuccess = false;
   try {
     const db = await getDbPool();
     if (db) {
@@ -1584,7 +1758,7 @@ export async function updateContentPostStatus(postId: string, status: DbContentP
       } else {
         await db.query('UPDATE content_posts SET status = ? WHERE id = ?', [status, postId]);
       }
-      return true;
+      dbSuccess = true;
     }
   } catch (err: any) {
     console.warn('[updateContentPostStatus] MySQL error:', err?.message);
@@ -1595,7 +1769,7 @@ export async function updateContentPostStatus(postId: string, status: DbContentP
     existing.status = status;
     return true;
   }
-  return false;
+  return dbSuccess;
 }
 
 export async function deleteContentPost(postId: string, companyId?: string): Promise<boolean> {

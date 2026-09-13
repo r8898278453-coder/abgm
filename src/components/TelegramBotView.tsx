@@ -12,9 +12,14 @@ import {
   TrendingUp,
   Clock,
   ShieldCheck,
+  Bell,
+  CheckCircle2,
+  AlertCircle,
+  Loader2,
 } from 'lucide-react';
 import { BusinessProfile } from '../types';
 import { chatWithMarketingAgent } from '../services/aiService';
+import { sendTelegramNotifyApi } from '../services/authService';
 
 interface TelegramBotViewProps {
   business: BusinessProfile;
@@ -59,11 +64,58 @@ export const TelegramBotView: React.FC<TelegramBotViewProps> = ({ business, onNa
 
   const [inputMessage, setInputMessage] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [testAlertMessage, setTestAlertMessage] = useState(
+    `🔔 Test Alert from ${business.name}: Real-time notification system verified successfully.`
+  );
+  const [isSendingAlert, setIsSendingAlert] = useState(false);
+  const [alertFeedback, setAlertFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping]);
+
+  const handleSendTestAlert = async (e?: React.FormEvent, customMsg?: string) => {
+    if (e) e.preventDefault();
+    const msgToSend = (customMsg || testAlertMessage).trim();
+    if (!msgToSend || isSendingAlert) return;
+
+    setIsSendingAlert(true);
+    setAlertFeedback(null);
+
+    try {
+      const res = await sendTelegramNotifyApi(msgToSend);
+      if (res.success) {
+        setAlertFeedback({
+          type: 'success',
+          message: '✓ Test alert delivered to your Telegram chat successfully!',
+        });
+        // Also reflect the dispatched alert in the interactive Telegram simulator feed
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `alert_${Date.now()}`,
+            sender: 'bot',
+            text: `📢 *DISPATCHED TELEGRAM NOTIFICATION:*\n\n${msgToSend}`,
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            isProactive: true,
+          },
+        ]);
+      } else {
+        setAlertFeedback({
+          type: 'error',
+          message: `Delivery failed: ${res.error || 'Check that TELEGRAM_BOT_TOKEN & TELEGRAM_CHAT_ID are configured in server environment.'}`,
+        });
+      }
+    } catch (err: any) {
+      setAlertFeedback({
+        type: 'error',
+        message: `Failed to dispatch alert: ${err?.message || 'Network error'}`,
+      });
+    } finally {
+      setIsSendingAlert(false);
+    }
+  };
 
   const handleSendMessage = async (textToSend?: string) => {
     const text = textToSend || inputMessage;
@@ -154,6 +206,84 @@ export const TelegramBotView: React.FC<TelegramBotViewProps> = ({ business, onNa
         </div>
       </div>
 
+      {/* Live Telegram Alert Broadcast Card */}
+      <div className="max-w-2xl mx-auto bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs space-y-3">
+        <div className="flex items-start sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-sky-50 text-sky-600 border border-sky-100 flex items-center justify-center shadow-2xs shrink-0">
+              <Bell className="w-4 h-4" />
+            </div>
+            <div>
+              <h2 className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+                Send Live Telegram Push Alert
+                <span className="text-[10px] font-semibold text-sky-600 bg-sky-50 px-1.5 py-0.5 rounded border border-sky-200">
+                  POST /api/telegram/notify
+                </span>
+              </h2>
+              <p className="text-[11px] text-slate-500">
+                Test real-time channel delivery to your configured Telegram bot & chat group.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <form onSubmit={(e) => handleSendTestAlert(e)} className="space-y-2">
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input
+              type="text"
+              value={testAlertMessage}
+              onChange={(e) => setTestAlertMessage(e.target.value)}
+              placeholder="Type a test alert message to deliver to Telegram..."
+              className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-indigo-600 focus:bg-white transition"
+              disabled={isSendingAlert}
+            />
+            <button
+              type="submit"
+              disabled={!testAlertMessage.trim() || isSendingAlert}
+              className="inline-flex items-center justify-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs px-4 py-2 rounded-xl transition shadow-xs whitespace-nowrap active:scale-95"
+            >
+              {isSendingAlert ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Sending...</span>
+                </>
+              ) : (
+                <>
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Send Test Alert</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {alertFeedback && (
+            <div
+              className={`text-xs px-3 py-2 rounded-xl flex items-center justify-between gap-2 border transition-all ${
+                alertFeedback.type === 'success'
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  : 'bg-rose-50 text-rose-800 border-rose-200'
+              }`}
+            >
+              <div className="flex items-center gap-1.5 font-medium">
+                {alertFeedback.type === 'success' ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                )}
+                <span>{alertFeedback.message}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAlertFeedback(null)}
+                className="text-slate-400 hover:text-slate-600 text-xs font-bold px-1"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+        </form>
+      </div>
+
       {/* Simulator Bento Container */}
       <div className="max-w-2xl mx-auto bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm flex flex-col h-[700px]">
         {/* Telegram Header */}
@@ -238,6 +368,13 @@ export const TelegramBotView: React.FC<TelegramBotViewProps> = ({ business, onNa
 
         {/* Quick Suggestion Chips */}
         <div className="bg-slate-50 border-t border-slate-200 px-4 py-2.5 flex items-center gap-2 overflow-x-auto text-[11px] no-scrollbar">
+          <button
+            onClick={() => handleSendTestAlert(undefined, `🔔 Test Alert: Marketing audit check triggered for ${business.name} at ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`)}
+            className="bg-sky-50 hover:bg-sky-100 text-sky-700 px-3.5 py-1.5 rounded-full whitespace-nowrap border border-sky-200 font-semibold shadow-2xs transition flex items-center gap-1.5 shrink-0"
+          >
+            <Bell className="w-3 h-3" />
+            Send Test Alert
+          </button>
           <button
             onClick={() => handleSendMessage('What happened today in my business?')}
             className="bg-white hover:bg-slate-100 text-slate-700 px-3.5 py-1.5 rounded-full whitespace-nowrap border border-slate-200 font-semibold shadow-2xs transition"

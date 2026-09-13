@@ -17,9 +17,11 @@ interface LocalSeoViewProps {
   onAddKeyword?: (kw: string) => void;
 }
 
-export const LocalSeoView: React.FC<LocalSeoViewProps> = ({ keywords }) => {
+export const LocalSeoView: React.FC<LocalSeoViewProps> = ({ keywords = [], onAddKeyword }) => {
   const [newKw, setNewKw] = useState('');
-  const [selectedKw, setSelectedKw] = useState<KeywordRank>(keywords[0]);
+  const [selectedKwId, setSelectedKwId] = useState<string | null>(null);
+
+  const selectedKw = keywords.length > 0 ? (keywords.find((k) => k.id === selectedKwId) || keywords[0]) : null;
 
   return (
     <div className="space-y-6 pb-12">
@@ -59,69 +61,77 @@ export const LocalSeoView: React.FC<LocalSeoViewProps> = ({ keywords }) => {
       </div>
 
       {/* Interactive Rank Grid */}
-      <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
-              Geographic Map Rank Grid for: <span className="text-indigo-600 normal-case">"{selectedKw.keyword}"</span>
-            </h2>
-            <p className="text-xs text-slate-500">Position in Google 3-Pack across geo coordinates</p>
+      {selectedKw ? (
+        <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
+                Geographic Map Rank Grid for: <span className="text-indigo-600 normal-case">"{selectedKw.keyword}"</span>
+              </h2>
+              <p className="text-xs text-slate-500">Position in Google 3-Pack across geo coordinates</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500 font-semibold">Search Volume:</span>
+              <span className="bg-slate-50 text-slate-800 text-xs px-3 py-1 rounded-xl border border-slate-200 font-bold">
+                {selectedKw.searchVolume}
+              </span>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500 font-semibold">Search Volume:</span>
-            <span className="bg-slate-50 text-slate-800 text-xs px-3 py-1 rounded-xl border border-slate-200 font-bold">
-              {selectedKw.searchVolume}
-            </span>
+
+          {/* 4 Node Grid Visualizer */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-2">
+            {/* Thane West */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 text-center shadow-xs">
+              <div className="text-xs text-slate-500 font-bold mb-1">Area A: Thane Stn / B-Cabin</div>
+              <div className={`text-4xl font-black my-2 ${selectedKw.gridRankings.vashi <= 3 ? 'text-emerald-700' : 'text-amber-600'}`}>
+                #{selectedKw.gridRankings.vashi}
+              </div>
+              <span className="text-[11px] text-emerald-700 font-bold bg-emerald-100 px-2.5 py-0.5 rounded-full">
+                Top 3 Map Pack ⭐
+              </span>
+            </div>
+
+            {/* Naupada */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 text-center shadow-xs">
+              <div className="text-xs text-slate-500 font-bold mb-1">Area B: Naupada Commercial</div>
+              <div className={`text-4xl font-black my-2 ${selectedKw.gridRankings.sanpada <= 3 ? 'text-emerald-700' : 'text-amber-600'}`}>
+                #{selectedKw.gridRankings.sanpada}
+              </div>
+              <span className="text-[11px] text-emerald-700 font-bold bg-emerald-100 px-2.5 py-0.5 rounded-full">
+                Top 3 Map Pack ⭐
+              </span>
+            </div>
+
+            {/* Ghodbunder */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 text-center shadow-xs">
+              <div className="text-xs text-slate-500 font-bold mb-1">Area C: Ghodbunder / Majiwada</div>
+              <div className={`text-4xl font-black my-2 ${selectedKw.gridRankings.nerul <= 3 ? 'text-emerald-700' : 'text-rose-600'}`}>
+                #{selectedKw.gridRankings.nerul}
+              </div>
+              <span className="text-[11px] text-amber-800 font-bold bg-amber-100 px-2.5 py-0.5 rounded-full">
+                Position #{selectedKw.gridRankings.nerul}
+              </span>
+            </div>
+
+            {/* Airoli IT Hub */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 text-center shadow-xs">
+              <div className="text-xs text-slate-500 font-bold mb-1">Area D: Airoli / Navi Mumbai Hub</div>
+              <div className={`text-4xl font-black my-2 ${selectedKw.gridRankings.belapur <= 3 ? 'text-emerald-700' : 'text-amber-600'}`}>
+                #{selectedKw.gridRankings.belapur}
+              </div>
+              <span className="text-[11px] text-amber-800 font-bold bg-amber-100 px-2.5 py-0.5 rounded-full">
+                Page 1 Organic
+              </span>
+            </div>
           </div>
         </div>
-
-        {/* 4 Node Grid Visualizer */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-2">
-          {/* Thane West */}
-          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 text-center shadow-xs">
-            <div className="text-xs text-slate-500 font-bold mb-1">Area A: Thane Stn / B-Cabin</div>
-            <div className={`text-4xl font-black my-2 ${selectedKw.gridRankings.vashi <= 3 ? 'text-emerald-700' : 'text-amber-600'}`}>
-              #{selectedKw.gridRankings.vashi}
-            </div>
-            <span className="text-[11px] text-emerald-700 font-bold bg-emerald-100 px-2.5 py-0.5 rounded-full">
-              Top 3 Map Pack ⭐
-            </span>
-          </div>
-
-          {/* Naupada */}
-          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 text-center shadow-xs">
-            <div className="text-xs text-slate-500 font-bold mb-1">Area B: Naupada Commercial</div>
-            <div className={`text-4xl font-black my-2 ${selectedKw.gridRankings.sanpada <= 3 ? 'text-emerald-700' : 'text-amber-600'}`}>
-              #{selectedKw.gridRankings.sanpada}
-            </div>
-            <span className="text-[11px] text-emerald-700 font-bold bg-emerald-100 px-2.5 py-0.5 rounded-full">
-              Top 3 Map Pack ⭐
-            </span>
-          </div>
-
-          {/* Ghodbunder */}
-          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 text-center shadow-xs">
-            <div className="text-xs text-slate-500 font-bold mb-1">Area C: Ghodbunder / Majiwada</div>
-            <div className={`text-4xl font-black my-2 ${selectedKw.gridRankings.nerul <= 3 ? 'text-emerald-700' : 'text-rose-600'}`}>
-              #{selectedKw.gridRankings.nerul}
-            </div>
-            <span className="text-[11px] text-amber-800 font-bold bg-amber-100 px-2.5 py-0.5 rounded-full">
-              Position #{selectedKw.gridRankings.nerul}
-            </span>
-          </div>
-
-          {/* Airoli IT Hub */}
-          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 text-center shadow-xs">
-            <div className="text-xs text-slate-500 font-bold mb-1">Area D: Airoli / Navi Mumbai Hub</div>
-            <div className={`text-4xl font-black my-2 ${selectedKw.gridRankings.belapur <= 3 ? 'text-emerald-700' : 'text-amber-600'}`}>
-              #{selectedKw.gridRankings.belapur}
-            </div>
-            <span className="text-[11px] text-amber-800 font-bold bg-amber-100 px-2.5 py-0.5 rounded-full">
-              Page 1 Organic
-            </span>
-          </div>
+      ) : (
+        <div className="bg-white border border-slate-200 rounded-3xl p-8 shadow-sm text-center">
+          <Compass className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+          <h3 className="font-bold text-slate-800 text-sm">No Keyword Selected</h3>
+          <p className="text-xs text-slate-500 mt-1">Configure target keywords to monitor local Google 3-Pack geo rankings.</p>
         </div>
-      </div>
+      )}
 
       {/* Keywords Performance Table */}
       <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-3">
@@ -149,14 +159,14 @@ export const LocalSeoView: React.FC<LocalSeoViewProps> = ({ keywords }) => {
             <tbody className="divide-y divide-slate-100">
               {keywords.map((kw) => {
                 const diff = kw.previousRank - kw.rank;
-                const isSelected = selectedKw.id === kw.id;
+                const isSelected = selectedKw?.id === kw.id;
                 return (
                   <tr
                     key={kw.id}
                     className={`hover:bg-slate-50 transition cursor-pointer ${
                       isSelected ? 'bg-indigo-50/60 font-semibold' : ''
                     }`}
-                    onClick={() => setSelectedKw(kw)}
+                    onClick={() => setSelectedKwId(kw.id)}
                   >
                     <td className="p-3 font-bold text-slate-900">
                       {kw.keyword}

@@ -14,20 +14,14 @@ This project is now equipped with **Capacitor Android Build Pipeline** (`@capaci
 
 When you download or clone this project to your local machine with Android Studio installed:
 
-### Step 1: Install Dependencies & Build Web Bundle
+### Step 1: Install Dependencies & Build Mobile Bundle
 ```bash
 npm install
-npm run build
+npm run build:mobile
 ```
+*(This builds the frontend bundle into `dist/client` with `VITE_API_BASE_URL=https://bga.aaditechs.in` and runs `cap sync`)*
 
-### Step 2: Initialize & Sync Android Platform
-```bash
-npx cap add android
-npm run cap:sync
-```
-*(This generates the native `/android` Gradle folder with all AndroidManifest, Java/Kotlin classes, and asset links)*
-
-### Step 3: Open in Android Studio & Generate APK
+### Step 2: Open in Android Studio & Generate APK
 ```bash
 npm run cap:android
 ```

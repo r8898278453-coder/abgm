@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Sparkles,
   Image as ImageIcon,
@@ -20,9 +20,17 @@ import {
   Database,
   Trash2,
   ArrowRight,
+  AlertTriangle,
+  X,
+  Loader2,
 } from 'lucide-react';
 import { BusinessProfile, ContentPost } from '../types';
 import { generateMarketingContent } from '../services/aiService';
+import {
+  createContentPostApi,
+  updatePostStatusApi,
+  deleteContentPostApi,
+} from '../services/authService';
 
 interface ContentStudioViewProps {
   business: BusinessProfile;
@@ -43,6 +51,7 @@ export const ContentStudioView: React.FC<ContentStudioViewProps> = ({
   onDeletePost,
   onNavigate,
 }) => {
+  const [localPosts, setLocalPosts] = useState<ContentPost[]>(posts);
   const [contentType, setContentType] = useState<'offer' | 'festival' | 'service' | 'educational'>('offer');
   const [targetPlatform, setTargetPlatform] = useState<'google' | 'instagram' | 'whatsapp'>('google');
   const [language, setLanguage] = useState<
@@ -52,7 +61,16 @@ export const ContentStudioView: React.FC<ContentStudioViewProps> = ({
   const [isGenerating, setIsGenerating] = useState(false);
   const [activeTab, setActiveTab] = useState<'copywriter' | 'creative' | 'reel' | 'posts'>('copywriter');
   const [scheduleSuccessToast, setScheduleSuccessToast] = useState<string | null>(null);
+  const [postActionError, setPostActionError] = useState<string | null>(null);
+  const [isSavingPost, setIsSavingPost] = useState(false);
+  const [isPublishingId, setIsPublishingId] = useState<string | null>(null);
+  const [isDeletingId, setIsDeletingId] = useState<string | null>(null);
   const [postFilter, setPostFilter] = useState<'all' | 'scheduled' | 'published'>('all');
+
+  // Sync with incoming props from parent
+  useEffect(() => {
+    setLocalPosts(posts);
+  }, [posts]);
 
   // Scheduling State
   const [scheduleDate, setScheduleDate] = useState(() => {
@@ -100,9 +118,11 @@ export const ContentStudioView: React.FC<ContentStudioViewProps> = ({
     setIsGenerating(false);
   };
 
-  const handleSchedulePost = () => {
-    const newPost: ContentPost = {
-      id: `post_${Date.now()}`,
+  const handleSchedulePost = async () => {
+    setIsSavingPost(true);
+    setPostActionError(null);
+
+    const postPayload: Partial<ContentPost> = {
       title: generatedPost.title || 'New Marketing Creative',
       type: contentType,
       platforms: [targetPlatform],
@@ -110,15 +130,109 @@ export const ContentStudioView: React.FC<ContentStudioViewProps> = ({
       caption: generatedPost.caption || '',
       cta: generatedPost.cta || '',
       hashtags: generatedPost.hashtags || [],
-      imageUrl: generatedPost.imageUrl || '',
+      imageUrl: generatedPost.imageUrl || 'https://images.unsplash.com/photo-1597872200969-2b65d56bd16b?auto=format&fit=crop&w=600&q=80',
       status: 'scheduled',
       scheduledDate: scheduleDate,
       timeSlot: scheduleTimeSlot,
       reelScript: generatedPost.reelScript,
     };
-    onAddNewPost(newPost);
-    setScheduleSuccessToast(`✓ Post "${newPost.title}" scheduled & saved to MySQL database!`);
-    setTimeout(() => setScheduleSuccessToast(null), 5000);
+
+    const tempId = `temp_post_${Date.now()}`;
+    const optimisticPost: ContentPost = {
+      id: tempId,
+      title: postPayload.title!,
+      type: postPayload.type!,
+      platforms: postPayload.platforms!,
+      headline: postPayload.headline!,
+      caption: postPayload.caption!,
+      cta: postPayload.cta!,
+      hashtags: postPayload.hashtags!,
+      imageUrl: postPayload.imageUrl!,
+      status: 'scheduled',
+      scheduledDate: postPayload.scheduledDate!,
+      timeSlot: postPayload.timeSlot!,
+      reelScript: postPayload.reelScript,
+    };
+
+    const previousPosts = [...localPosts];
+    setLocalPosts((prev) => [optimisticPost, ...prev]);
+
+    try {
+      const created = await createContentPostApi({
+        ...postPayload,
+        companyId,
+      });
+
+      if (!created || !created.id) {
+        throw new Error('Server did not return a valid post record');
+      }
+
+      setLocalPosts((prev) => prev.map((p) => (p.id === tempId ? created : p)));
+      onAddNewPost(created);
+      setScheduleSuccessToast(`✓ Post "${created.title}" scheduled & saved to MySQL database (ID: ${created.id})!`);
+      setTimeout(() => setScheduleSuccessToast(null), 5000);
+    } catch (err: any) {
+      console.error('Failed to create content post in MySQL:', err);
+      // Roll back
+      setLocalPosts(previousPosts);
+      setPostActionError(`Failed to save post to MySQL: ${err?.message || 'Server error'}. Changes rolled back.`);
+    } finally {
+      setIsSavingPost(false);
+    }
+  };
+
+  const handlePublishPost = async (postId: string) => {
+    const previousPosts = [...localPosts];
+    // Optimistic status update
+    setLocalPosts((prev) =>
+      prev.map((p) => (p.id === postId ? { ...p, status: 'published' as const } : p))
+    );
+    setIsPublishingId(postId);
+    setPostActionError(null);
+
+    try {
+      const ok = await updatePostStatusApi(postId, 'published', companyId);
+      if (!ok) {
+        throw new Error('Failed to update status on server');
+      }
+      setScheduleSuccessToast('✓ Post published to MySQL successfully!');
+      setTimeout(() => setScheduleSuccessToast(null), 4000);
+      onPublishPost?.(postId);
+    } catch (err: any) {
+      console.error('Failed to publish post to MySQL:', err);
+      // Roll back
+      setLocalPosts(previousPosts);
+      setPostActionError(`Failed to publish post: ${err?.message || 'Server error'}. Status reverted.`);
+    } finally {
+      setIsPublishingId(null);
+    }
+  };
+
+  const handleDeletePost = async (postId: string, postTitle: string) => {
+    if (!window.confirm(`Delete post "${postTitle}" from MySQL database?`)) return;
+
+    const previousPosts = [...localPosts];
+    // Optimistic deletion
+    setLocalPosts((prev) => prev.filter((p) => p.id !== postId));
+    setIsDeletingId(postId);
+    setPostActionError(null);
+
+    try {
+      const ok = await deleteContentPostApi(postId, companyId);
+      if (!ok) {
+        throw new Error('Failed to delete post on server');
+      }
+      setScheduleSuccessToast('✓ Post deleted from MySQL database.');
+      setTimeout(() => setScheduleSuccessToast(null), 3000);
+      onDeletePost?.(postId);
+    } catch (err: any) {
+      console.error('Failed to delete post from MySQL:', err);
+      // Roll back
+      setLocalPosts(previousPosts);
+      setPostActionError(`Failed to delete post from MySQL: ${err?.message || 'Server error'}. Post restored.`);
+    } finally {
+      setIsDeletingId(null);
+    }
   };
 
   return (
@@ -133,6 +247,22 @@ export const ContentStudioView: React.FC<ContentStudioViewProps> = ({
           <button
             onClick={() => setScheduleSuccessToast(null)}
             className="text-emerald-700 hover:text-emerald-950 font-black px-2 py-0.5 rounded-md hover:bg-emerald-100"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Action Error Banner with Rollback Notification */}
+      {postActionError && (
+        <div className="bg-rose-50 border border-rose-200 text-rose-900 px-4 py-3 rounded-2xl flex items-center justify-between text-xs font-bold animate-in fade-in shadow-xs">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+            <span>{postActionError}</span>
+          </div>
+          <button
+            onClick={() => setPostActionError(null)}
+            className="text-rose-700 hover:text-rose-950 font-black px-2 py-0.5 rounded-md hover:bg-rose-100"
           >
             ✕
           </button>
@@ -189,7 +319,7 @@ export const ContentStudioView: React.FC<ContentStudioViewProps> = ({
             }`}
           >
             <Database className="w-3 h-3" />
-            <span>Posts Queue ({posts.length})</span>
+            <span>Posts Queue ({localPosts.length})</span>
           </button>
         </div>
       </div>
@@ -213,10 +343,10 @@ export const ContentStudioView: React.FC<ContentStudioViewProps> = ({
                     }`}
                   >
                     {filter === 'all'
-                      ? `All (${posts.length})`
+                      ? `All (${localPosts.length})`
                       : filter === 'scheduled'
-                      ? `Scheduled (${posts.filter((p) => p.status === 'scheduled').length})`
-                      : `Published (${posts.filter((p) => p.status === 'published').length})`}
+                      ? `Scheduled (${localPosts.filter((p) => p.status === 'scheduled').length})`
+                      : `Published (${localPosts.filter((p) => p.status === 'published').length})`}
                   </button>
                 ))}
               </div>
@@ -241,7 +371,7 @@ export const ContentStudioView: React.FC<ContentStudioViewProps> = ({
           </div>
 
           {/* Posts List */}
-          {posts.filter((p) => postFilter === 'all' || p.status === postFilter).length === 0 ? (
+          {localPosts.filter((p) => postFilter === 'all' || p.status === postFilter).length === 0 ? (
             <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center space-y-3">
               <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto">
                 <Database className="w-6 h-6" />
@@ -260,7 +390,7 @@ export const ContentStudioView: React.FC<ContentStudioViewProps> = ({
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {posts
+              {localPosts
                 .filter((p) => postFilter === 'all' || p.status === postFilter)
                 .map((post) => (
                   <div
@@ -289,19 +419,14 @@ export const ContentStudioView: React.FC<ContentStudioViewProps> = ({
                           >
                             {post.status}
                           </span>
-                          {onDeletePost && (
-                            <button
-                              onClick={() => {
-                                if (window.confirm(`Delete post "${post.title}" from MySQL?`)) {
-                                  onDeletePost(post.id);
-                                }
-                              }}
-                              className="text-slate-400 hover:text-rose-600 p-1 rounded-lg hover:bg-rose-50 transition"
-                              title="Delete Post from MySQL"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
+                          <button
+                            onClick={() => handleDeletePost(post.id, post.title)}
+                            disabled={isDeletingId === post.id}
+                            className="text-slate-400 hover:text-rose-600 p-1 rounded-lg hover:bg-rose-50 transition disabled:opacity-50"
+                            title="Delete Post from MySQL"
+                          >
+                            <Trash2 className={`w-3.5 h-3.5 ${isDeletingId === post.id ? 'animate-pulse text-rose-500' : ''}`} />
+                          </button>
                         </div>
                       </div>
 
@@ -329,13 +454,14 @@ export const ContentStudioView: React.FC<ContentStudioViewProps> = ({
 
                     <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
                       <span className="text-[10px] text-slate-400 font-mono">ID: {post.id}</span>
-                      {post.status === 'scheduled' && onPublishPost && (
+                      {post.status === 'scheduled' && (
                         <button
-                          onClick={() => onPublishPost(post.id)}
-                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center gap-1.5"
+                          onClick={() => handlePublishPost(post.id)}
+                          disabled={isPublishingId === post.id}
+                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center gap-1.5 disabled:opacity-50"
                         >
                           <Check className="w-3.5 h-3.5" />
-                          <span>Publish to MySQL Now</span>
+                          <span>{isPublishingId === post.id ? 'Publishing...' : 'Publish to MySQL Now'}</span>
                         </button>
                       )}
                     </div>
@@ -528,9 +654,15 @@ export const ContentStudioView: React.FC<ContentStudioViewProps> = ({
                   </div>
                   <button
                     onClick={handleSchedulePost}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-3.5 py-2 rounded-xl flex items-center gap-1.5 transition shadow-xs whitespace-nowrap"
+                    disabled={isSavingPost}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-3.5 py-2 rounded-xl flex items-center gap-1.5 transition shadow-xs whitespace-nowrap disabled:opacity-50"
                   >
-                    <Send className="w-3 h-3" /> Save to MySQL
+                    {isSavingPost ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <Send className="w-3 h-3" />
+                    )}
+                    <span>{isSavingPost ? 'Saving to MySQL...' : 'Save to MySQL'}</span>
                   </button>
                 </div>
               </div>

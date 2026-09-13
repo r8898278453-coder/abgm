@@ -52,8 +52,13 @@ export const BillingAdminView: React.FC<BillingAdminViewProps> = ({ business }) 
       });
 
       if (res.success && res.shortUrl) {
-        setCheckoutNotice(`Razorpay payment checkout generated for ${plan.name} (₹${priceNumber}). Opening secure gateway...`);
-        window.open(res.shortUrl, '_blank', 'noopener,noreferrer');
+        setCheckoutNotice(`Razorpay checkout generated for ${plan.name} (₹${priceNumber}): ${res.shortUrl}`);
+        // Attempt open, and provide link in notice
+        try {
+          window.open(res.shortUrl, '_blank', 'noopener,noreferrer');
+        } catch {
+          // In sandboxed iframes, link remains clickable in notice
+        }
       } else {
         alert(res.error || 'Failed to initiate Razorpay checkout');
       }
@@ -309,14 +314,24 @@ export const BillingAdminView: React.FC<BillingAdminViewProps> = ({ business }) 
       {activeTab === 'plans' && (
         <div className="space-y-4">
           {checkoutNotice && (
-            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3.5 text-xs text-emerald-900 flex items-center justify-between animate-in fade-in">
-              <div className="flex items-center gap-2">
+            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3.5 text-xs text-emerald-900 flex items-center justify-between gap-3 animate-in fade-in">
+              <div className="flex items-center gap-2 flex-wrap">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                 <span>{checkoutNotice}</span>
+                {checkoutNotice.includes('https://') && (
+                  <a
+                    href={checkoutNotice.split(': ')[1] || '#'}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 font-bold text-indigo-600 hover:text-indigo-800 underline ml-1"
+                  >
+                    Open Checkout Gateway <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
               </div>
               <button
                 onClick={() => setCheckoutNotice(null)}
-                className="text-slate-400 hover:text-slate-600 text-xs font-bold"
+                className="text-slate-400 hover:text-slate-600 text-xs font-bold shrink-0"
               >
                 Dismiss
               </button>
